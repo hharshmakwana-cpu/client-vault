@@ -1,5 +1,5 @@
 // Offline support. Bump CACHE when you change any file.
-const CACHE = 'client-vault-v7';
+const CACHE = 'client-vault-v8';
 const ASSETS = ['./', './index.html', './app.js', './config.js', './manifest.json',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 

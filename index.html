@@ -194,6 +194,48 @@ select.finput{color:var(--accent);background:none}
 @media (display-mode:standalone){#toast{bottom:calc(64px + env(safe-area-inset-bottom))}}
 #toast.show{opacity:1;transform:translate(-50%,0) scale(1)}
 
+/* ---- practice: tiles, segmented control, due chips, ledger ---- */
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0 16px 16px}
+.tiles.two{grid-template-columns:repeat(2,1fr)}
+.tile{background:var(--card);border-radius:16px;padding:13px 13px 11px;text-align:left;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:3px;min-width:0;transition:transform .18s var(--ease)}
+button.tile:active{transform:scale(.96)}
+.tile b{font-size:21px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile span{font-size:12px;color:var(--sub);font-weight:500}
+.tile.red b{color:var(--danger)}.tile.amber b{color:var(--warn)}.tile.blue b{color:var(--accent)}.tile.green b{color:var(--ok)}
+.seg{display:flex;background:var(--fill);border-radius:11px;padding:2px;margin:0 16px 18px;gap:2px}
+.seg button{flex:1;min-width:0;padding:7px 4px;border-radius:9px;font-size:13px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .25s,box-shadow .25s}
+.seg button b{font-weight:600;color:var(--sub)}
+.seg button.on{background:var(--card);box-shadow:0 1px 3px rgba(0,0,0,.12),0 0 0 .5px rgba(0,0,0,.04)}
+.duechip{flex:none;font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--fill);color:var(--sub);font-variant-numeric:tabular-nums;white-space:nowrap}
+.duechip.late{background:rgba(229,53,43,.12);color:var(--danger)}
+.duechip.soon{background:rgba(255,149,0,.16);color:var(--warn)}
+.duechip.okc{background:rgba(52,199,89,.16);color:var(--ok)}
+.duechip.big{display:inline-block;margin-top:12px;font-size:13px;padding:6px 14px}
+.trow{padding-top:10px;padding-bottom:10px}
+/* in due lists the return + period line matters most, so let it use two lines */
+.lrow[data-act="task"] .lt small,.lrow[data-act="pwtask"] .lt small,.lrow .lt small.wrap2,.trow .lt small{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.sdot{width:10px;height:10px;border-radius:50%;flex:none;background:var(--ter)}
+.sdot.s-docs{background:var(--accent)}.sdot.s-filed,.sdot.s-done{background:#34c759}
+.task-hero{padding-top:2px}
+.task-hero h2{font-size:24px}
+.eyebrow{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);margin:0}
+.dnote{font-size:12px;color:var(--sub);margin-top:4px}
+.muted{color:var(--sub)}
+.amt{flex:none;font-weight:600;font-variant-numeric:tabular-nums}
+.amt.due{color:var(--danger)}.amt.in{color:var(--ok)}
+.linkbtn{color:var(--accent);font-weight:500}
+.stat .grow{display:block}
+.bar-track{display:block;height:6px;border-radius:3px;background:var(--fill);overflow:hidden;margin-top:8px}
+.bar-fill{display:block;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:3px}
+.tname{display:block;font-weight:600;margin-bottom:3px}
+.preview{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:14px;color:var(--sub);line-height:1.35;white-space:normal}
+button.row:disabled{opacity:.45}
+.sendbtn,.copybtn{flex:none;font-size:14px;font-weight:600;color:#fff;background:var(--accent);padding:7px 16px;border-radius:999px;transition:transform .18s var(--ease),background .25s}
+.sendbtn:active,.copybtn:active{transform:scale(.94)}
+.sendbtn.sent,.copybtn.done{background:#34c759}
+.errtext{color:var(--danger)!important}.warntext{color:var(--warn)!important}
+a.btn{display:block;text-decoration:none}
+
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 </style>
 </head>

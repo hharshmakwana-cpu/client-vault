@@ -190,6 +190,7 @@ const SECTIONS = [
     { k: 'name', label: t => PERSONAL.has(t) ? 'Name' : 'Legal name', rule: 'name', ph: 'Required — exactly as on PAN' },
     { k: 'type', label: 'Status', kind: 'select' },
     { k: 'fileNo', label: 'File no.', ph: 'Optional' },
+    { k: 'group', label: 'Group', ph: 'Family or group, e.g. Patel family', list: true },
     { k: 'contact', label: 'Contact person', ph: 'Director / partner / trustee', show: t => !PERSONAL.has(t) },
     { k: 'mobile', label: 'Mobile', input: 'tel', rule: 'mobile', norm: 'mobile', ph: '10-digit number', link: 'tel:' },
     { k: 'email', label: 'Email', input: 'email', rule: 'email', norm: 'lower', link: 'mailto:' },
@@ -202,11 +203,11 @@ const SECTIONS = [
     { k: 'regNo', label: t => REG_LABEL[t] || 'Registration no.', up: true, rule: 'regNo', norm: 'id', ph: t => t === 'Company' ? 'U74999GJ2015PTC123456' : t === 'LLP' ? 'AAB-1234' : 'If registered', show: t => !!REG_LABEL[t] },
     { k: 'tan', label: 'TAN', up: true, max: 10, rule: 'tan', norm: 'id', ph: 'If they deduct TDS' },
   ] },
-  { title: 'Income Tax portal', url: 'https://eportal.incometax.gov.in/iec/foservices/#/login', fields: [
+  { title: 'Income Tax portal', portal: 'it', fields: [
     { k: 'itUser', label: 'User ID', up: true, rule: 'itUser', norm: 'id', ph: 'The PAN' },
     { k: 'itPass', label: 'Password', secret: true },
   ] },
-  { title: 'TRACES', url: 'https://www.tdscpc.gov.in/app/login.xhtml', fields: [
+  { title: 'TRACES', portal: 'traces', fields: [
     { k: 'tracesUser', label: 'User ID', up: true, norm: 'up' },
     { k: 'tracesPass', label: 'Password', secret: true },
   ] },
@@ -394,8 +395,18 @@ const avatar = (n, big) => `<div class="avatar${big ? ' big' : ''}" style="--h:$
 // Like iOS: a deeper screen slides in from the right over the previous one ("push") and slides
 // back out ("pop"); the edit screen rises as a sheet ("present") and drops away ("dismiss").
 // The outgoing screen is copied into a layer so both are visible while they move.
-const DEPTH = { list: 0, detail: 1, settings: 1, edit: 2, changepw: 2, import: 2 };
-const PARENT = { detail: () => 'list', settings: () => 'list', changepw: () => 'settings', import: () => 'settings', edit: id => id ? 'detail' : 'list' };
+const DEPTH = { list: 0, due: 1, dash: 1, settings: 1, detail: 2, bulk: 2, templates: 2, csvimport: 2, changepw: 2, import: 2, edit: 3, task: 3, comp: 3, fees: 3, wa: 4, login: 4 };
+// Where "back" (and swipe-back) goes from each screen.
+const toDetailOr = (a, v, arg) => a.back === v ? { v, arg } : { v: 'detail', arg: a.id };
+const PARENT = {
+  detail: () => ({ v: DETAIL_BACK }), due: () => ({ v: 'list' }), dash: () => ({ v: 'list' }), settings: () => ({ v: 'list' }),
+  edit: id => id ? { v: 'detail', arg: id } : { v: 'list' }, comp: id => ({ v: 'detail', arg: id }), fees: id => ({ v: 'detail', arg: id }),
+  task: a => a.back === 'detail' ? { v: 'detail', arg: a.id } : { v: 'due' }, bulk: () => ({ v: 'due' }),
+  wa: a => a.back === 'task' ? { v: 'task', arg: a.task } : toDetailOr(a, 'fees', a.id),
+  login: a => a.back === 'task' ? { v: 'task', arg: a.task } : { v: 'detail', arg: a.id },
+  changepw: () => ({ v: 'settings' }), import: () => ({ v: 'settings' }), templates: () => ({ v: 'settings' }), csvimport: () => ({ v: 'settings' }),
+};
+let DETAIL_BACK = 'list';
 const snaps = {}; // last look of each screen, shown underneath while swiping back
 const EASE = 'cubic-bezier(.32,.72,0,1)', DUR = 460;
 const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -456,8 +467,11 @@ function go(v, arg, keepScroll) {
     : v === 'edit' ? 'present' : from === 'edit' ? 'dismiss'
     : DEPTH[v] > DEPTH[from] ? 'push' : DEPTH[v] < DEPTH[from] ? 'pop' : '';
   const layer = mode && copyOfApp(mode === 'push' || mode === 'present' ? 'under' : 'over'), y = scrollY;
+  if (v === 'detail' && DETAIL_BACK_LABEL[from]) DETAIL_BACK = from;
   cur = { v, arg }; ACT = {};
-  ({ list: renderList, detail: renderDetail, edit: renderEdit, settings: renderSettings, changepw: renderChangePw, import: renderImport })[v](arg);
+  ({ list: renderList, detail: renderDetail, edit: renderEdit, settings: renderSettings, changepw: renderChangePw, import: renderImport,
+    due: renderDue, task: renderTask, comp: renderComp, fees: renderFees, wa: renderWa, bulk: renderBulk, login: renderLogin,
+    templates: renderTemplates, csvimport: renderCsvImport, dash: renderDash })[v](arg);
   if (!keepScroll) scrollTo(0, 0);
   // Start after any scroll restore by goBack(), but before the browser paints.
   queueMicrotask(() => { if (layer) transition(mode, layer, y); updateBar(); });
@@ -505,8 +519,8 @@ addEventListener('touchend', endSwipe);
 addEventListener('touchcancel', endSwipe);
 function startSwipe(s) {
   finishTransition?.();
-  const target = PARENT[cur.v](cur.arg), snap = snaps[target];
-  const ok = snap && (target !== 'detail' || snap.arg === cur.arg);
+  const target = PARENT[cur.v](cur.arg), snap = snaps[target.v];
+  const ok = snap && (target.arg === undefined || snap.arg === target.arg);
   const tpl = document.createElement('template');
   tpl.innerHTML = ok ? snap.html : '';
   s.layer = makeLayer('under', [...tpl.content.childNodes]);
@@ -543,6 +557,7 @@ async function applyMeta() {
 // Brings records saved by older versions of the app up to the current shape.
 function tidy(c) {
   c.custom ||= {}; c.extra ||= []; c.businesses ||= [];
+  c.comp ||= {}; c.work ||= {}; c.fees ||= []; c.pwd ||= {}; // returns tracked, filing status, fee ledger, password dates
   if (!c.gst) c.gst = c.gstin || c.gstUser || c.gstPass ? [{ gstin: c.gstin || '', user: c.gstUser || '', pass: c.gstPass || '' }] : [];
   delete c.gstin; delete c.gstUser; delete c.gstPass;
   if (c.type === 'Proprietorship') c.type = 'Individual';
@@ -680,12 +695,12 @@ document.addEventListener('visibilitychange', () => {
   if (!S) return;
   if (document.hidden) {
     hiddenAt = Date.now();
-    if (suppressLock) return;
+    if (suppressLock || Date.now() < graceUntil) return;
     document.body.classList.add('cover');
     if (settings.lockAfter === 0) lock();
   } else {
     document.body.classList.remove('cover');
-    if (suppressLock) { suppressLock = false; return; }
+    if (suppressLock || Date.now() < graceUntil) { suppressLock = false; return; }
     if (Date.now() - hiddenAt >= settings.lockAfter * 1000) lock();
     else if (cur.v !== 'edit') sync();
   }
@@ -912,12 +927,20 @@ function renderUnlockMsg(msg) { renderUnlock('pw'); $('#err').textContent = msg;
 
 // ---------- list ----------
 function haystack(c) {
-  const parts = [c.name, c.pan, c.mobile, c.email, c.fileNo, c.tan, c.itUser, c.type, c.regNo, c.contact];
+  const parts = [c.name, c.pan, c.mobile, c.email, c.fileNo, c.tan, c.itUser, c.type, c.regNo, c.contact, c.group];
   for (const g of c.gst) parts.push(g.gstin, g.user);
   for (const b of c.businesses) parts.push(b.name, b.nature, b.udyam);
   for (const f of S.meta.customFields) if (!f.secret && c.custom[f.id]) parts.push(c.custom[f.id]);
   for (const x of c.extra) if (!x.secret) parts.push(x.label, x.value);
   return parts.filter(Boolean).join(' ').toLowerCase();
+}
+// Overdue / due-this-week / fees at a glance on the home screen.
+function statTiles() {
+  const L = dueLists(), fees = S.clients.reduce((s, c) => s + Math.max(0, feeTotals(c).due), 0);
+  return `<div class="tiles">
+    <button class="tile ${L.overdue.length ? 'red' : ''}" data-act="due" data-f="overdue"><b>${L.overdue.length}</b><span>Overdue</span></button>
+    <button class="tile ${L.week.length ? 'amber' : ''}" data-act="due" data-f="week"><b>${L.week.length}</b><span>Due this week</span></button>
+    <button class="tile blue" data-act="dash"><b>${inr(fees)}</b><span>Fees due</span></button></div>`;
 }
 function renderList() {
   let banner = '';
@@ -932,11 +955,14 @@ function renderList() {
     right: `<button class="nav-btn" data-act="add" aria-label="Add client">${I.plus}</button>`,
   }) + `
     <h1 class="large" data-big>Clients</h1>
-    <div class="search">${I.search}<input id="q" type="search" placeholder="Name, PAN, GSTIN, mobile, business…" value="${esc(Q)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Search clients"></div>
+    ${S.clients.length ? statTiles() : ''}
+    <div class="search">${I.search}<input id="q" type="search" placeholder="Name, PAN, GSTIN, mobile, group…" value="${esc(Q)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Search clients"></div>
     <div class="chips" id="chips" role="tablist" aria-label="Filter by status"></div>
     ${banner}<div id="list"></div>`;
   drawList();
   $('#q').oninput = e => { Q = e.target.value; drawList(); };
+  ACT.due = t => { DUEF = t.dataset.f; go('due'); };
+  ACT.dash = () => go('dash');
   ACT.settings = () => go('settings');
   ACT.add = () => { if (canWrite()) go('edit', null); };
   ACT.open = t => go('detail', t.dataset.id);
@@ -973,6 +999,7 @@ function drawList() {
 }
 
 // ---------- detail ----------
+const DETAIL_BACK_LABEL = { list: 'Clients', dash: 'Overview', due: 'Due dates' };
 function renderDetail(id) {
   const c = S.clients.find(x => x.id === id);
   if (!c) return go('list');
@@ -980,27 +1007,45 @@ function renderDetail(id) {
   const row = (label, value, o = {}) => {
     const i = vals.push({ label, raw: value, text: o.text ?? value, mask: o.secret ? o.mask || '••••••••' : null }) - 1;
     const shown = o.secret ? esc(vals[i].mask) : o.link ? `<a href="${esc(o.link + value)}">${esc(vals[i].text)}</a>` : esc(vals[i].text);
-    return `<div class="row"><div class="dcol"><div class="dlabel">${esc(label)}</div><div class="dval${o.mono ? ' mono' : ''}${o.muted ? ' muted' : ''}" id="v${i}">${shown}</div></div>${
+    return `<div class="row"><div class="dcol"><div class="dlabel">${esc(label)}</div><div class="dval${o.mono ? ' mono' : ''}${o.muted ? ' muted' : ''}" id="v${i}">${shown}</div>${o.note ? `<div class="dnote">${esc(o.note)}</div>` : ''}</div>${
       o.secret ? `<button class="ibtn" data-act="reveal" data-i="${i}" aria-label="Show ${esc(label)}">${I.eye}</button>` : ''
     }${value ? `<button class="ibtn" data-act="copy" data-i="${i}" aria-label="Copy ${esc(label)}">${I.copy}</button>` : ''}</div>`;
   };
-  const section = (title, rows, url) => rows.length
-    ? `<div class="group-h"><span>${esc(title)}</span>${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">Open portal ${I.ext}</a>` : ''}</div><div class="group">${rows.join('')}</div>` : '';
-  const fieldRows = s => s.fields.filter(f => !['name', 'type', 'fileNo'].includes(f.k) && c[f.k] && shows(f, c.type)).map(f => {
+  const section = (title, rows, extra = '') => rows.length
+    ? `<div class="group-h"><span>${esc(title)}</span>${extra}</div><div class="group">${rows.join('')}</div>` : '';
+  const loginBtn = p => `<button class="linkbtn" data-act="login" data-p="${p}">Log in ${I.ext}</button>`;
+  const pwNote = k => pwDays() && c.pwd[k] ? `Changed ${ago(c.pwd[k])}` : '';
+  const fieldRows = s => s.fields.filter(f => !['name', 'type', 'fileNo', 'group'].includes(f.k) && c[f.k] && shows(f, c.type)).map(f => {
     const v = c[f.k], o = { secret: f.secret, mono: f.up || f.rule === 'aadhaar' || f.input === 'numeric' || f.input === 'tel', link: f.link };
     if (f.k === 'aadhaar') { const d = aadhaarDigits(v); if (d.length === 12) { o.text = d.replace(/(\d{4})(?=\d)/g, '$1 '); o.mask = '•••• •••• ' + d.slice(-4); } }
     if (f.input === 'date') o.text = fmtDate(v);
+    if (f.k === 'itPass') o.note = pwNote('it');
+    if (f.k === 'tracesPass') o.note = pwNote('traces');
     return row(fnv(f.label, c.type), v, o);
   });
 
-  const mob = normMobile(c.mobile || '');
-  let html = bar({ left: backBtn('Clients', 'back'), title: c.name, big: true, right: `<button class="nav-btn" data-act="edit">Edit</button>` });
-  html += `<div class="hero">${avatar(c.name, true)}<h2 data-big>${esc(c.name)}</h2><p>${esc([c.type, c.fileNo && 'File ' + c.fileNo].filter(Boolean).join(' · '))}</p></div>`;
+  const m = mobileOf(c), today = todayStr();
+  let html = bar({ left: backBtn(DETAIL_BACK_LABEL[DETAIL_BACK] || 'Clients', 'back'), title: c.name, big: true, right: `<button class="nav-btn" data-act="edit">Edit</button>` });
+  html += `<div class="hero">${avatar(c.name, true)}<h2 data-big>${esc(c.name)}</h2><p>${esc([c.type, c.fileNo && 'File ' + c.fileNo, c.group].filter(Boolean).join(' · '))}</p></div>`;
   html += `<nav class="qa" aria-label="Contact">
     <a ${c.mobile ? `href="tel:${esc(c.mobile)}"` : 'aria-disabled="true"'}>${I.phone}<span>Call</span></a>
-    <a ${/^[6-9]\d{9}$/.test(mob) ? `href="https://wa.me/91${mob}" target="_blank" rel="noopener noreferrer"` : 'aria-disabled="true"'}>${I.chat}<span>WhatsApp</span></a>
+    <a href="#" ${m ? 'data-act="wa"' : 'aria-disabled="true"'}>${I.chat}<span>WhatsApp</span></a>
     <a ${c.email ? `href="mailto:${esc(c.email)}"` : 'aria-disabled="true"'}>${I.mail}<span>Email</span></a>
   </nav>`;
+
+  // Compliance: what's open in the next 45 days
+  const open = [...tasksOf(c, addDays(today, 45)), ...pwTasks(c).filter(t => t.due <= addDays(today, 45))]
+    .filter(t => !DONE.has(t.status)).sort((a, b) => a.due < b.due ? -1 : 1);
+  const tracked = Object.keys(c.comp).length;
+  const compRows = open.slice(0, 6).map(t => taskRow(t, false));
+  if (open.length > 6) compRows.push(`<button class="row link" data-act="alldue">${open.length - 6} more…</button>`);
+  if (!tracked) compRows.push(`<button class="row link" data-act="comp">Choose returns to track</button>`);
+  else if (!open.length) compRows.push(`<div class="row"><span class="grow muted">Nothing due in the next 45 days</span></div>`);
+  html += section('Compliance', compRows, tracked ? `<button class="linkbtn" data-act="comp">Manage</button>` : '');
+
+  const f = feeTotals(c);
+  html += section('Fees', [`<button class="row" data-act="fees"><span class="grow">${f.due > 0 ? 'Outstanding' : f.billed ? 'All paid' : 'No fees recorded'}<small>Billed ${inr(f.billed)} · Received ${inr(f.received)}</small></span><span class="amt${f.due > 0 ? ' due' : ''}">${inr(f.due)}</span><span class="chev">${I.chev}</span></button>`]);
+
   html += section(SECTIONS[0].title, fieldRows(SECTIONS[0]));
   if (PERSONAL.has(c.type)) c.businesses.forEach((b, i) => {
     const rows = [];
@@ -1012,25 +1057,35 @@ function renderDetail(id) {
     html += section(c.businesses.length > 1 ? `Business ${i + 1}` : 'Business', rows);
   });
   html += section(SECTIONS[1].title, fieldRows(SECTIONS[1]));
-  html += section(SECTIONS[2].title, fieldRows(SECTIONS[2]), SECTIONS[2].url);
-  c.gst.forEach(g => {
+  html += section(SECTIONS[2].title, fieldRows(SECTIONS[2]), loginBtn('it'));
+  c.gst.forEach((g, i) => {
     const rows = [];
     if (g.gstin) rows.push(row('GSTIN', g.gstin, { mono: true }));
     if (g.user) rows.push(row('Username', g.user));
-    if (g.pass) rows.push(row('Password', g.pass, { secret: true }));
-    html += section(`GST · ${GST_STATES[g.gstin?.slice(0, 2)] || 'Registration'}`, rows, GST_URL);
+    if (g.pass) rows.push(row('Password', g.pass, { secret: true, note: pwNote('gst:' + g.gstin) }));
+    html += section(`GST · ${GST_STATES[g.gstin?.slice(0, 2)] || 'Registration'}`, rows, loginBtn('gst:' + i));
   });
-  for (const s of SECTIONS.slice(3)) html += section(s.title, fieldRows(s), s.url);
+  for (const s of SECTIONS.slice(3)) html += section(s.title, fieldRows(s), s.portal ? loginBtn(s.portal) : '');
   html += section('Other details', [
-    ...S.meta.customFields.filter(f => c.custom[f.id]).map(f => row(f.label, c.custom[f.id], { secret: f.secret })),
+    ...S.meta.customFields.filter(x => c.custom[x.id]).map(x => row(x.label, c.custom[x.id], { secret: x.secret })),
     ...c.extra.filter(x => x.value).map(x => row(x.label || 'Other', x.value, { secret: x.secret })),
   ]);
+  const rel = related(c);
+  if (rel.length) html += section(`${c.group} · related`, rel.map(clientRow));
   html += `<p class="meta">Added ${fmtDate(c.created)}${c.updated && c.updated !== c.created ? ' · Updated ' + fmtDate(c.updated) : ''}</p>`;
   app.innerHTML = html;
 
   const timers = {};
-  ACT.back = () => goBack('list');
+  ACT.back = () => goBack(DETAIL_BACK);
   ACT.edit = () => { if (canWrite()) go('edit', id); };
+  ACT.wa = () => go('wa', { id, back: 'detail' });
+  ACT.comp = () => { if (canWrite()) go('comp', id); };
+  ACT.fees = () => go('fees', id);
+  ACT.task = t => go('task', { id, key: t.dataset.k, back: 'detail' });
+  ACT.pwtask = () => { if (canWrite()) go('edit', id); };
+  ACT.alldue = () => { DUEF = 'open'; go('due'); };
+  ACT.login = t => go('login', { id, p: t.dataset.p, back: 'detail' });
+  ACT.open = t => go('detail', t.dataset.id);
   ACT.copy = async t => {
     const v = vals[+t.dataset.i];
     try {
@@ -1090,7 +1145,7 @@ function fieldHTML(f, v, type) {
   } else if (f.kind === 'textarea') input = `<textarea class="finput" ${attrs} placeholder="${esc(fnv(f.ph, type) || '')}">${esc(v)}</textarea>`;
   else {
     const t = f.input === 'tel' ? 'tel' : f.input === 'email' ? 'email' : f.input === 'date' ? 'date' : 'text';
-    input = `<input class="finput${f.up ? ' up' : ''}${f.secret ? ' masked' : ''}" type="${t}" ${attrs}${f.input === 'numeric' ? ' inputmode="numeric"' : ''}${f.max ? ` maxlength="${f.max + 4}"` : ''}${f.input === 'date' ? ` max="${new Date().toISOString().slice(0, 10)}"` : ''} data-ph="${f.k}" placeholder="${esc(fnv(f.ph, type) || '')}" value="${esc(v)}">`;
+    input = `<input class="finput${f.up ? ' up' : ''}${f.secret ? ' masked' : ''}" type="${t}" ${attrs}${f.input === 'numeric' ? ' inputmode="numeric"' : ''}${f.max ? ` maxlength="${f.max + 4}"` : ''}${f.input === 'date' ? ` max="${new Date().toISOString().slice(0, 10)}"` : ''} data-ph="${f.k}"${f.list ? ` list="dl-${f.k}"` : ''} placeholder="${esc(fnv(f.ph, type) || '')}" value="${esc(v)}">`;
   }
   return `<div class="frow${f.bare ? ' bare' : ''}" data-row="${f.k}"${shows(f, type) ? '' : ' hidden'}>${f.bare ? '' : `<span class="flabel" data-lab="${f.k}">${esc(name)}</span>`}${input}${
     f.secret ? eyeBtn(name) : ''}${f.rule ? msgDiv : ''}</div>`;
@@ -1117,7 +1172,8 @@ function renderEdit(id) {
   html += `<p class="foot">Use the lock icon to keep a value hidden until you tap the eye.</p>`;
   html += sec(SECTIONS[SECTIONS.length - 1]);
   if (orig) html += `<div class="group"><button type="button" class="row danger" data-act="del">Delete Client</button></div>`;
-  html += `</form>`;
+  const groups = [...new Set(S.clients.map(x => x.group).filter(Boolean))].sort();
+  html += `<datalist id="dl-group">${groups.map(g => `<option value="${esc(g)}">`).join('')}</datalist></form>`;
   app.innerHTML = html;
 
   const form = $('#form');
@@ -1246,6 +1302,13 @@ function renderEdit(id) {
     const firstGstin = d.gst.find(g => GSTIN_RE.test(g.gstin))?.gstin;
     if (!d.pan && firstGstin) d.pan = firstGstin.slice(2, 12);
     if (d.itPass && !d.itUser && d.pan) d.itUser = d.pan;
+    // Remember when each portal password was last changed, for the change reminders.
+    d.pwd = { ...c.pwd };
+    const stamp = (k, before, now) => { if (!now) delete d.pwd[k]; else if (now !== before || !d.pwd[k]) d.pwd[k] = todayStr(); };
+    stamp('it', orig?.itPass, d.itPass);
+    stamp('traces', orig?.tracesPass, d.tracesPass);
+    for (const k of Object.keys(d.pwd)) if (k.startsWith('gst:') && !d.gst.some(g => 'gst:' + g.gstin === k)) delete d.pwd[k];
+    d.gst.forEach(g => { if (g.gstin) stamp('gst:' + g.gstin, orig?.gst.find(x => x.gstin === g.gstin)?.pass, g.pass); });
     const warnings = results.filter(([, r]) => r.level === 'warn').map(([, r]) => '• ' + r.msg);
     if (warnings.length && !confirm(`Please check:\n${warnings.join('\n')}\n\nSave anyway?`)) return;
     const now = Date.now();
@@ -1277,6 +1340,21 @@ function renderSettings() {
       <div class="row"><input id="cfName" class="finput" placeholder="New field, e.g. MCA login" autocomplete="off" style="padding:0" aria-label="New custom field name"><button class="toggle" data-act="cfsec" aria-pressed="false">Secret</button><button class="nav-btn strong" style="min-height:0;padding:4px" data-act="cfadd">Add</button></div>
     </div>
     <p class="foot">Custom fields appear on every client. For one-off details, use “Add field” inside a client.</p>
+    <div class="group-h">Practice</div>
+    <div class="group">
+      <button class="row" data-act="dash"><span class="grow">Overview</span><span class="chev">${I.chev}</span></button>
+      <button class="row" data-act="due"><span class="grow">Due dates</span><span class="chev">${I.chev}</span></button>
+      <button class="row" data-act="templates"><span class="grow">WhatsApp messages</span><span class="chev">${I.chev}</span></button>
+      <label class="row"><span class="grow">Password change reminder</span><select class="plain" id="pwDays">${[[0, 'Off'], [90, 'Every 90 days'], [120, 'Every 120 days'], [180, 'Every 180 days'], [365, 'Every year']].map(([v, l]) => `<option value="${v}"${pwDays() === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+    </div>
+    <p class="foot">Reminds you to change each portal password this long after it was last changed in the app.</p>
+    <div class="group-h">Excel</div>
+    <div class="group">
+      <button class="row link" data-act="csvin">Import clients from Excel (CSV)</button>
+      <button class="row link" data-act="csvout">Export client list (CSV)</button>
+      <button class="row link" data-act="csvsample">Download sample import file</button>
+    </div>
+    <p class="foot">In Excel, use File → Save As → CSV. Exported lists leave out passwords and show only the last 4 digits of Aadhaar.</p>
     <div class="group-h">Backup</div>
     <div class="group">
       <button class="row link" data-act="export">Export encrypted backup</button>
@@ -1289,7 +1367,8 @@ function renderSettings() {
       ${DB.demo ? '' : `<button class="row link" data-act="signout">Sign out of this device</button>`}
     </div>
     <p class="foot center" style="margin-top:-12px">${plural(S.clients.length, 'client')} · End-to-end encrypted</p>
-    <input type="file" id="file" accept=".json,application/json" hidden>`;
+    <input type="file" id="file" accept=".json,application/json" hidden>
+    <input type="file" id="csvfile" accept=".csv,text/csv,text/comma-separated-values" hidden>`;
 
   $('#lockAfter').onchange = e => { settings.lockAfter = +e.target.value; saveSettings(); toast('Auto-lock updated'); };
   ACT.back = () => goBack('list');
@@ -1315,6 +1394,24 @@ function renderSettings() {
     if (!canWrite() || !confirm(`Remove “${f.label}” from all clients? Values already saved in it will be hidden.`)) return;
     S.meta.customFields = cf.filter(x => x !== f);
     try { await saveMeta(); renderSettings(); } catch (e) { S.meta.customFields = cf; toast(errText(e)); }
+  };
+  $('#pwDays').onchange = async e => {
+    if (!canWrite()) return;
+    const prev = S.meta.pwDays;
+    S.meta.pwDays = +e.target.value;
+    try { await saveMeta(); toast('Reminder updated'); } catch (er) { S.meta.pwDays = prev; toast(errText(er)); }
+  };
+  ACT.dash = () => go('dash');
+  ACT.due = () => { DUEF = 'open'; go('due'); };
+  ACT.templates = () => go('templates');
+  ACT.csvout = () => exportClientsCSV();
+  ACT.csvsample = () => sampleCSV();
+  ACT.csvin = () => { if (canWrite()) { suppressLock = true; $('#csvfile').click(); } };
+  $('#csvfile').onchange = async e => {
+    suppressLock = false;
+    const file = e.target.files[0]; if (!file) return;
+    try { go('csvimport', { rows: csvToClients(await file.text()) }); }
+    catch (er) { toast(er.message || 'Couldn’t read that file'); }
   };
   ACT.export = () => exportBackup();
   ACT.import = () => { suppressLock = true; $('#file').click(); };
@@ -1413,6 +1510,602 @@ function renderImport(b) {
       go('list');
     } catch (ex) { btn.disabled = false; btn.textContent = 'Import'; er.textContent = errText(ex); }
   };
+}
+
+// ---------- compliance calendar ----------
+// Statutory due dates as notified. Extensions announced later by CBDT/CBIC/MCA are not applied
+// automatically; any single filing's due date can be changed on its screen.
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const ymd = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+const todayStr = () => { const t = new Date(); return ymd(t.getFullYear(), t.getMonth() + 1, t.getDate()); };
+const addDays = (s, n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return ymd(d.getFullYear(), d.getMonth() + 1, d.getDate()); };
+const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 864e5);
+const fmtShort = s => new Date(s + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+const fyStart = s => { const d = new Date(s + 'T00:00:00'); return d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; };
+const FY = s => `FY ${s}-${String(s + 1).slice(2)}`, AY = s => `AY ${s + 1}-${String(s + 2).slice(2)}`;
+const nextMonth = (y, m) => m === 12 ? [y + 1, 1] : [y, m + 1];
+const monthsOfFY = s => Array.from({ length: 12 }, (_, i) => { const m = (i + 3) % 12 + 1; return [m >= 4 ? s : s + 1, m]; });
+const quartersOfFY = s => [[s, 4, 6], [s, 7, 9], [s, 10, 12], [s + 1, 1, 3]];
+const monthly = (day, marchDue) => s => monthsOfFY(s).map(([y, m]) => {
+  const [ny, nm] = nextMonth(y, m);
+  return { p: ymd(y, m, 1).slice(0, 7), label: `${MON[m - 1]} ${y}`, due: marchDue && m === 3 ? ymd(y, 4, 30) : ymd(ny, nm, day) };
+});
+const quarterly = day => (s, c, g) => quartersOfFY(s).map(([y, a, b], i) => {
+  const [ny, nm] = nextMonth(y, b);
+  return { p: `${s}Q${i + 1}`, label: `${MON[a - 1]}–${MON[b - 1]} ${y}`, due: ymd(ny, nm, typeof day === 'function' ? day(g) : day) };
+});
+const yearly = (m, d, label = FY) => s => [{ p: `FY${s}`, label: label(s), due: ymd(s + 1, m, d) }];
+const dated = list => s => list(s).map(([y, m, d, label], i) => ({ p: `${s}-${i + 1}`, label, due: ymd(y, m, d) }));
+// QRMP GSTR-3B is due on the 22nd in these states/UTs (by GSTIN state code), on the 24th elsewhere.
+const QRMP22 = new Set(['22', '23', '24', '25', '26', '27', '29', '30', '31', '32', '33', '34', '35', '36', '37']);
+const qrmpDay = g => !g || QRMP22.has(g.slice(0, 2)) ? 22 : 24;
+const NOT_CO = ['Individual', 'HUF', 'Partnership Firm', 'LLP', 'Trust', 'AOP', 'BOI', 'Local Authority', 'Artificial Juridical Person', 'Government'];
+const COMP = [
+  { code: 'ITR', group: 'Income Tax', name: 'ITR (non-audit)', due: '31 Jul', portal: 'it', types: NOT_CO, gen: yearly(7, 31, AY) },
+  { code: 'ITR_A', group: 'Income Tax', name: 'ITR (audit / company)', due: '31 Oct', portal: 'it', gen: yearly(10, 31, AY) },
+  { code: 'TAR', group: 'Income Tax', name: 'Tax audit report', due: '30 Sep', portal: 'it', gen: yearly(9, 30) },
+  { code: 'ADV', group: 'Income Tax', name: 'Advance tax', due: '15 Jun · Sep · Dec · Mar', portal: 'it',
+    gen: dated(s => [[s, 6, 15, `${FY(s)} · 1st instalment`], [s, 9, 15, `${FY(s)} · 2nd instalment`], [s, 12, 15, `${FY(s)} · 3rd instalment`], [s + 1, 3, 15, `${FY(s)} · 4th instalment`]]) },
+  { code: 'GSTR1M', group: 'GST', gst: true, name: 'GSTR-1 (monthly)', due: '11th of next month', portal: 'gst', gen: monthly(11) },
+  { code: 'GSTR3BM', group: 'GST', gst: true, name: 'GSTR-3B (monthly)', due: '20th of next month', portal: 'gst', gen: monthly(20) },
+  { code: 'GSTR1Q', group: 'GST', gst: true, name: 'GSTR-1 (QRMP)', due: '13th after the quarter', portal: 'gst', gen: quarterly(13) },
+  { code: 'GSTR3BQ', group: 'GST', gst: true, name: 'GSTR-3B (QRMP)', due: '22nd / 24th after the quarter', portal: 'gst', gen: quarterly(qrmpDay) },
+  { code: 'CMP08', group: 'GST', gst: true, name: 'CMP-08 (composition)', due: '18th after the quarter', portal: 'gst', gen: quarterly(18) },
+  { code: 'GSTR4', group: 'GST', gst: true, name: 'GSTR-4 (composition annual)', due: '30 Apr', portal: 'gst', gen: yearly(4, 30) },
+  { code: 'GSTR9', group: 'GST', gst: true, name: 'GSTR-9 / 9C (annual)', due: '31 Dec', portal: 'gst', gen: yearly(12, 31) },
+  { code: 'TDSPAY', group: 'TDS', name: 'TDS / TCS payment', due: '7th of next month (March: 30 Apr)', portal: 'it', gen: monthly(7, true) },
+  { code: 'TDSRET', group: 'TDS', name: 'TDS / TCS returns', due: '31 Jul · 31 Oct · 31 Jan · 31 May', portal: 'traces',
+    gen: dated(s => [[s, 7, 31, `${FY(s)} · Q1`], [s, 10, 31, `${FY(s)} · Q2`], [s + 1, 1, 31, `${FY(s)} · Q3`], [s + 1, 5, 31, `${FY(s)} · Q4`]]) },
+  { code: 'PFESI', group: 'Payroll', name: 'PF & ESI', due: '15th of next month', gen: monthly(15) },
+  { code: 'AOC4', group: 'ROC', types: ['Company'], name: 'AOC-4 (financial statements)', due: '30 Oct (AGM on 30 Sep)', gen: yearly(10, 30) },
+  { code: 'MGT7', group: 'ROC', types: ['Company'], name: 'MGT-7 (annual return)', due: '29 Nov (AGM on 30 Sep)', gen: yearly(11, 29) },
+  { code: 'LLP11', group: 'ROC', types: ['LLP'], name: 'LLP Form 11 (annual return)', due: '30 May', gen: yearly(5, 30) },
+  { code: 'LLP8', group: 'ROC', types: ['LLP'], name: 'LLP Form 8 (accounts)', due: '30 Oct', gen: yearly(10, 30) },
+];
+const COMPS = Object.fromEntries(COMP.map(d => [d.code, d]));
+const STATUS = [['pending', 'Pending'], ['docs', 'Docs received'], ['filed', 'Filed'], ['done', 'Completed']];
+const STATUS_LABEL = Object.fromEntries(STATUS);
+const DONE = new Set(['filed', 'done']);
+
+// Every filing for a client from when tracking started up to `until`, oldest first.
+function tasksOf(c, until) {
+  const out = [], gstins = c.gst.map(g => g.gstin).filter(g => GSTIN_RE.test(g));
+  for (const [code, from] of Object.entries(c.comp)) {
+    const def = COMPS[code];
+    if (!def) continue;
+    const regs = def.gst && gstins.length ? gstins : [''];
+    for (let s = fyStart(from) - 1; s <= fyStart(until); s++) for (const g of regs) for (const t of def.gen(s, c, g)) {
+      const key = `${code}|${t.p}${g ? '|' + g : ''}`, w = c.work[key] || {}, due = w.due || t.due;
+      if (t.due < from || due > until) continue;
+      const title = def.name + (g && gstins.length > 1 ? ` · ${GST_STATES[g.slice(0, 2)] || g}` : '');
+      out.push({ kind: 'task', key, def, c, g, title, period: t.label, std: t.due, due, w, status: w.s || 'pending' });
+    }
+  }
+  return out.sort((a, b) => a.due < b.due ? -1 : a.due > b.due ? 1 : 0);
+}
+
+// ---------- portal passwords ----------
+const pwDays = () => S.meta.pwDays ?? 180;
+const PORTAL_URL = { it: 'https://eportal.incometax.gov.in/iec/foservices/#/login', traces: 'https://www.tdscpc.gov.in/app/login.xhtml', gst: GST_URL };
+function portalsOf(c) {
+  const list = [{ p: 'it', name: 'Income Tax', user: c.itUser || c.pan || '', pass: c.itPass || '', url: PORTAL_URL.it }];
+  c.gst.forEach((g, i) => list.push({ p: 'gst:' + i, pw: 'gst:' + g.gstin, name: c.gst.length > 1 ? `GST · ${GST_STATES[g.gstin?.slice(0, 2)] || g.gstin}` : 'GST', user: g.user || '', pass: g.pass || '', url: PORTAL_URL.gst }));
+  list.push({ p: 'traces', name: 'TRACES', user: c.tracesUser || '', pass: c.tracesPass || '', url: PORTAL_URL.traces });
+  for (const x of list) x.pw ||= x.p;
+  return list;
+}
+function pwTasks(c) {
+  const days = pwDays();
+  if (!days) return [];
+  return portalsOf(c).filter(x => x.pass && c.pwd[x.pw]).map(x => ({
+    kind: 'pw', key: 'pw|' + x.pw, c, title: `Change ${x.name} password`, period: `Last changed ${fmtDate(c.pwd[x.pw])}`,
+    due: addDays(c.pwd[x.pw], days), status: 'pending', w: {},
+  }));
+}
+function ago(s) {
+  const n = daysBetween(s, todayStr());
+  return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 60 ? `${n} days ago` : `${Math.round(n / 30)} months ago`;
+}
+
+// ---------- fees ----------
+const inr = n => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN');
+function feeTotals(c) {
+  let billed = 0, received = 0;
+  for (const e of c.fees) e.kind === 'bill' ? (billed += +e.amt) : (received += +e.amt);
+  return { billed, received, due: Math.round((billed - received) * 100) / 100 };
+}
+
+// ---------- WhatsApp templates ----------
+const DEFAULT_TPLS = [
+  { id: 'itr', name: 'ITR documents request', text: 'Dear {name}, please share the following for filing your Income Tax Return for {ay}: Form 16 / salary details, bank statements and interest certificates, investment proofs (80C, 80D etc.), capital gains statements, and any other income details. — {firm}' },
+  { id: 'gst', name: 'GST data request', text: 'Dear {name}, please share your sales and purchase details for {period} so we can file your GST returns. — {firm}' },
+  { id: 'due', name: 'Due date reminder', text: 'Dear {name}, a reminder that your {return} for {period} is due on {due}. Please share the pending details at the earliest. — {firm}' },
+  { id: 'filed', name: 'Return filed', text: 'Dear {name}, your {return} for {period} has been filed on {filed}. Acknowledgement no.: {ack}. — {firm}' },
+  { id: 'fees', name: 'Fees reminder', text: 'Dear {name}, a balance of {balance} is pending towards our professional fees. Kindly arrange the payment at your convenience. — {firm}' },
+];
+const tpls = () => S.meta.templates || DEFAULT_TPLS;
+const TPL_TAGS = ['name', 'pan', 'gstin', 'ay', 'fy', 'return', 'period', 'due', 'filed', 'ack', 'balance', 'firm'];
+function fillTpl(text, c, t) {
+  const last = new Date(); last.setDate(1); last.setMonth(last.getMonth() - 1);
+  const prevFY = fyStart(todayStr()) - 1;
+  const v = {
+    name: c.name, pan: c.pan || '', gstin: t?.g || c.gst[0]?.gstin || '', ay: AY(prevFY), fy: FY(prevFY),
+    return: t?.title || '', period: t?.period || `${MON[last.getMonth()]} ${last.getFullYear()}`,
+    due: t ? fmtDate(t.due) : '', filed: t?.w?.on ? fmtDate(t.w.on) : '', ack: t?.w?.ack || '',
+    balance: inr(feeTotals(c).due), firm: S.meta.firm || '',
+  };
+  return text.replace(/\{(\w+)\}/g, (m, k) => k in v ? v[k] : m).replace(/\s*—\s*$/, '').trim();
+}
+const mobileOf = c => { const m = normMobile(c.mobile || ''); return /^[6-9]\d{9}$/.test(m) ? m : ''; };
+// Leaving for WhatsApp or a portal shouldn't lock the app if it's set to lock on leaving.
+let graceUntil = 0;
+function openWhatsApp(c, text) {
+  const m = mobileOf(c);
+  if (!m) return toast('Add a 10-digit mobile number first');
+  graceUntil = Date.now() + 120000;
+  window.open(`https://wa.me/91${m}${text ? '?text=' + encodeURIComponent(text) : ''}`, '_blank', 'noopener');
+}
+
+// ---------- shared bits ----------
+const related = c => c.group ? S.clients.filter(x => x.id !== c.id && x.group && x.group.toLowerCase() === c.group.toLowerCase()) : [];
+const clientRow = x => `<button class="row lrow" data-act="open" data-id="${esc(x.id)}">${avatar(x.name)}<span class="lt"><b>${esc(x.name)}</b><small>${esc([x.type, x.pan].filter(Boolean).join(' · '))}</small></span><span class="chev">${I.chev}</span></button>`;
+function dueChip(t) {
+  if (DONE.has(t.status)) return `<span class="duechip okc">${t.w.on ? 'Filed ' + fmtShort(t.w.on) : 'Filed'}</span>`;
+  const n = daysBetween(todayStr(), t.due);
+  const txt = n < 0 ? `${-n}d overdue` : n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : fmtShort(t.due);
+  return `<span class="duechip ${n < 0 ? 'late' : n <= 7 ? 'soon' : ''}">${txt}</span>`;
+}
+const taskRow = (t, withClient = true) => `<button class="row ${withClient ? 'lrow' : 'trow'}" data-act="${t.kind === 'pw' ? 'pwtask' : 'task'}" data-id="${esc(t.c.id)}" data-k="${esc(t.key)}">
+  ${withClient ? avatar(t.c.name) : `<span class="sdot s-${t.status}" aria-hidden="true"></span>`}
+  <span class="lt"><b>${esc(withClient ? t.c.name : t.title)}</b><small>${esc(withClient ? `${t.title} · ${t.period}` : `${t.period}${t.kind === 'task' ? ' · ' + STATUS_LABEL[t.status] : ''}`)}</small></span>
+  ${dueChip(t)}</button>`;
+function collectDue(until) {
+  return S.clients.flatMap(c => [...tasksOf(c, until), ...pwTasks(c).filter(t => t.due <= until)]).sort((a, b) => a.due < b.due ? -1 : a.due > b.due ? 1 : 0);
+}
+function dueLists() {
+  const today = todayStr(), wk = addDays(today, 7), all = collectDue(addDays(today, 30));
+  const open = all.filter(t => !DONE.has(t.status));
+  return {
+    today, all,
+    open,
+    overdue: open.filter(t => t.due < today),
+    week: open.filter(t => t.due <= wk),
+    filed: all.filter(t => DONE.has(t.status) && (t.w.on || t.due) >= addDays(today, -60)).reverse(),
+  };
+}
+const findTask = a => { const c = S.clients.find(x => x.id === a.id); return c && tasksOf(c, addDays(todayStr(), 800)).find(t => t.key === a.key); };
+const backTo = () => { const p = PARENT[cur.v](cur.arg); goBack(p.v, p.arg); };
+async function updateClient(c, change) {
+  const d = structuredClone(c);
+  change(d);
+  d.updated = Date.now();
+  await saveClient(d);
+  return d;
+}
+
+// ---------- due dates screen ----------
+let DUEF = 'open';
+function renderDue() {
+  const L = dueLists(), list = L[DUEF];
+  const tabs = [['open', 'All open'], ['overdue', 'Overdue'], ['week', 'This week'], ['filed', 'Filed']];
+  let html = bar({ left: backBtn('Clients', 'back'), title: 'Due dates', right: list.length && DUEF !== 'filed' ? `<button class="nav-btn" data-act="bulk">Remind</button>` : '' });
+  html += `<div class="seg" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${DUEF === k}" class="${DUEF === k ? 'on' : ''}" data-act="duef" data-f="${k}">${l}${k !== 'filed' ? ` <b>${L[k].length}</b>` : ''}</button>`).join('')}</div>`;
+  if (!list.length) {
+    const any = S.clients.some(c => Object.keys(c.comp).length);
+    html += `<div class="empty"><b>${any ? 'All clear' : 'Nothing tracked yet'}</b>${any ? 'Nothing here right now.' : 'Open a client, then Compliance → Choose returns to track their due dates.'}</div>`;
+  } else if (DUEF === 'filed') {
+    html += `<div class="group-h">Filed in the last 60 days</div><div class="group">${list.map(t => taskRow(t)).join('')}</div>`;
+  } else {
+    const wk = addDays(L.today, 7);
+    const groups = [['Overdue', t => t.due < L.today], ['Today', t => t.due === L.today], ['This week', t => t.due > L.today && t.due <= wk], ['Later this month', t => t.due > wk]];
+    for (const [h, f] of groups) { const g = list.filter(f); if (g.length) html += `<div class="group-h">${h}</div><div class="group">${g.map(t => taskRow(t)).join('')}</div>`; }
+  }
+  html += `<p class="foot center" style="margin-top:-12px">Statutory due dates. Extensions notified later aren’t applied automatically — change a filing’s date on its screen.</p>`;
+  app.innerHTML = html;
+  ACT.back = () => goBack('list');
+  ACT.duef = t => { DUEF = t.dataset.f; go('due', undefined, true); };
+  ACT.task = t => go('task', { id: t.dataset.id, key: t.dataset.k, back: 'due' });
+  ACT.pwtask = t => { if (canWrite()) go('edit', t.dataset.id); };
+  ACT.bulk = () => { BULK_SENT.clear(); go('bulk'); };
+}
+
+// ---------- one filing ----------
+function renderTask(a) {
+  const t = findTask(a);
+  if (!t) return backTo();
+  const c = t.c, w = t.w, today = todayStr();
+  let st = t.status;
+  const n = daysBetween(today, t.due);
+  const when = DONE.has(st) ? 'Filed' : n < 0 ? `${-n} day${n === -1 ? '' : 's'} overdue` : n === 0 ? 'Due today' : `Due in ${n} day${n === 1 ? '' : 's'}`;
+  let html = bar({ left: backBtn(a.back === 'detail' ? c.name.split(' ')[0] : 'Due dates', 'back'), title: t.title, right: `<button class="nav-btn strong" data-act="save">Done</button>` });
+  html += `<div class="hero task-hero"><p class="eyebrow">${esc(t.period)}</p><h2 data-big>${esc(t.title)}</h2><p>${esc(c.name)}</p>
+    <span class="duechip big ${DONE.has(st) ? 'okc' : n < 0 ? 'late' : n <= 7 ? 'soon' : ''}">${when} · ${fmtDate(t.due)}</span></div>`;
+  html += `<div class="seg" role="radiogroup" aria-label="Status">${STATUS.map(([k, l]) => `<button role="radio" aria-checked="${st === k}" class="${st === k ? 'on' : ''}" data-act="st" data-s="${k}">${l}</button>`).join('')}</div>`;
+  html += `<form id="tf" autocomplete="off"><div class="group">
+    <label class="frow" id="onRow"${DONE.has(st) ? '' : ' hidden'}><span class="flabel">Filed on</span><input class="finput" type="date" id="on" value="${esc(w.on || today)}" max="${today}"></label>
+    <label class="frow"><span class="flabel">Ack / ARN</span><input class="finput mono" id="ack" value="${esc(w.ack || '')}" placeholder="Acknowledgement number" autocapitalize="characters" autocorrect="off" spellcheck="false"></label>
+    <label class="frow"><span class="flabel">Due date</span><input class="finput" type="date" id="due" value="${esc(t.due)}"></label>
+    ${w.bill ? '' : `<label class="frow"><span class="flabel">Fee (₹)</span><input class="finput" id="fee" inputmode="decimal" placeholder="Optional — adds a bill"></label>`}
+    <label class="frow bare"><textarea class="finput" id="note" placeholder="Notes for this filing">${esc(w.note || '')}</textarea></label>
+  </div></form>`;
+  if (t.due !== t.std) html += `<p class="foot">Statutory due date: ${fmtDate(t.std)}.</p>`;
+  const portal = t.def.portal && portalsOf(c).find(x => t.def.portal === 'gst' ? x.p.startsWith('gst:') && (!t.g || c.gst[+x.p.slice(4)]?.gstin === t.g) : x.p === t.def.portal);
+  html += `<div class="group">
+    ${portal ? `<button class="row link" data-act="login" data-p="${portal.p}">Log in to ${esc(portal.name)} portal</button>` : ''}
+    <button class="row link" data-act="remind">Send WhatsApp message</button>
+    ${a.back === 'detail' ? '' : `<button class="row link" data-act="client">Open ${esc(c.name)}</button>`}
+  </div>`;
+  app.innerHTML = html;
+  $('#tf').onsubmit = e => e.preventDefault();
+  ACT.back = backTo;
+  ACT.st = b => {
+    st = b.dataset.s;
+    $$('.seg button', app).forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', x === b); });
+    $('#onRow').hidden = !DONE.has(st);
+  };
+  ACT.login = b => go('login', { id: c.id, p: b.dataset.p, back: 'task', task: a });
+  ACT.remind = () => go('wa', { id: c.id, key: t.key, back: 'task', task: a, pick: DONE.has(st) ? 'filed' : 'due' });
+  ACT.client = () => go('detail', c.id);
+  ACT.save = async b => {
+    if (!canWrite()) return;
+    const fee = parseFloat(($('#fee')?.value || '').replace(/[,\s₹]/g, ''));
+    if ($('#fee')?.value.trim() && !(fee > 0)) return toast('Enter the fee as a number');
+    const due = $('#due').value || t.std;
+    const nw = { s: st, ack: $('#ack').value.trim().toUpperCase(), note: $('#note').value.trim() };
+    if (DONE.has(st)) nw.on = $('#on').value || today;
+    if (due !== t.std) nw.due = due;
+    if (w.bill) nw.bill = w.bill;
+    b.disabled = true;
+    try {
+      await updateClient(c, d => {
+        if (fee > 0) { const e = { id: uid(), date: nw.on || today, kind: 'bill', amt: fee, desc: `${t.title} · ${t.period}` }; d.fees.push(e); nw.bill = e.id; }
+        for (const k of Object.keys(nw)) if (nw[k] === '' || nw[k] == null) delete nw[k];
+        d.work[t.key] = nw;
+      });
+      toast('Saved'); backTo();
+    } catch (e) { b.disabled = false; toast(errText(e)); }
+  };
+}
+
+// ---------- choose returns to track ----------
+function renderComp(id) {
+  const c = S.clients.find(x => x.id === id);
+  if (!c) return go('list');
+  const sel = new Set(Object.keys(c.comp)), noGst = !c.gst.some(g => GSTIN_RE.test(g.gstin));
+  let html = bar({ left: `<button class="nav-btn" data-act="back">Cancel</button>`, title: 'Returns to track', right: `<button class="nav-btn strong" data-act="save">Done</button>` });
+  html += `<p class="foot" style="margin:0 34px 16px">${esc(c.name)} · ${esc(c.type)}</p>`;
+  for (const g of ['Income Tax', 'GST', 'TDS', 'Payroll', 'ROC']) {
+    const defs = COMP.filter(d => d.group === g && (!d.types || d.types.includes(c.type)));
+    if (!defs.length) continue;
+    html += `<div class="group-h">${g}</div><div class="group">${defs.map(d => `<div class="row"><span class="grow">${esc(d.name)}<small>Due ${esc(d.due)}</small></span>${sw(sel.has(d.code), 'tog', ` data-c="${d.code}" aria-label="${esc(d.name)}"`)}</div>`).join('')}</div>`;
+    if (g === 'GST' && noGst) html += `<p class="foot">Add a GSTIN to this client so GST filings show the right state and due dates.</p>`;
+  }
+  html += `<p class="foot">Tracking starts with filings due in the last 60 days. Extensions notified later aren’t applied automatically.</p>`;
+  app.innerHTML = html;
+  ACT.back = backTo;
+  ACT.tog = t => { const on = t.getAttribute('aria-checked') !== 'true'; t.setAttribute('aria-checked', on); on ? sel.add(t.dataset.c) : sel.delete(t.dataset.c); };
+  ACT.save = async b => {
+    if (!canWrite()) return;
+    const start = addDays(todayStr(), -60);
+    b.disabled = true;
+    try {
+      await updateClient(c, d => { d.comp = Object.fromEntries([...sel].map(k => [k, c.comp[k] || start])); });
+      toast('Saved'); backTo();
+    } catch (e) { b.disabled = false; toast(errText(e)); }
+  };
+}
+
+// ---------- fees ledger ----------
+function renderFees(id) {
+  const c = S.clients.find(x => x.id === id);
+  if (!c) return go('list');
+  const f = feeTotals(c), today = todayStr();
+  let kind = 'bill';
+  let html = bar({ left: backBtn(c.name.split(' ')[0], 'back'), title: 'Fees' });
+  html += `<div class="tiles"><div class="tile"><b>${inr(f.billed)}</b><span>Billed</span></div><div class="tile"><b>${inr(f.received)}</b><span>Received</span></div><div class="tile ${f.due > 0 ? 'red' : 'green'}"><b>${inr(f.due)}</b><span>Outstanding</span></div></div>`;
+  html += `<div class="seg" role="radiogroup" aria-label="Entry type"><button class="on" role="radio" aria-checked="true" data-act="kind" data-k="bill">Bill</button><button role="radio" aria-checked="false" data-act="kind" data-k="rcpt">Payment received</button></div>`;
+  html += `<form id="ff" autocomplete="off"><div class="group">
+    <label class="frow"><span class="flabel">Amount (₹)</span><input class="finput" id="amt" inputmode="decimal" placeholder="0"></label>
+    <label class="frow"><span class="flabel">Date</span><input class="finput" type="date" id="fdate" value="${today}" max="${today}"></label>
+    <label class="frow"><span class="flabel">For</span><input class="finput" id="fdesc" placeholder="e.g. ITR AY 2026-27"></label>
+    <button type="button" class="row link" data-act="fadd" style="justify-content:center;font-weight:600">Add entry</button>
+  </div></form>`;
+  const entries = [...c.fees].sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
+  html += entries.length ? `<div class="group-h">Ledger</div><div class="group">${entries.map(e => `<button class="row" data-act="fdel" data-i="${esc(e.id)}"><span class="grow">${esc(e.desc || (e.kind === 'bill' ? 'Professional fees' : 'Payment received'))}<small>${fmtDate(e.date)} · ${e.kind === 'bill' ? 'Bill' : 'Payment'}</small></span><span class="amt${e.kind === 'bill' ? '' : ' in'}">${e.kind === 'bill' ? '' : '−'}${inr(e.amt)}</span></button>`).join('')}</div>
+    <p class="foot">Tap an entry to delete it.</p>` : `<div class="empty"><b>No entries yet</b>Add a bill when you agree a fee, and a payment when it’s received.</div>`;
+  if (f.due > 0) html += `<div class="group"><button class="row link" data-act="remindfee">Send fees reminder on WhatsApp</button></div>`;
+  app.innerHTML = html;
+  $('#ff').onsubmit = e => e.preventDefault();
+  ACT.back = backTo;
+  ACT.kind = b => { kind = b.dataset.k; $$('.seg button', app).forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', x === b); }); };
+  ACT.fadd = async b => {
+    if (!canWrite()) return;
+    const amt = parseFloat($('#amt').value.replace(/[,\s₹]/g, ''));
+    if (!(amt > 0)) { toast('Enter an amount'); return $('#amt').focus(); }
+    const date = $('#fdate').value || today;
+    if (date > today) return toast('The date can’t be in the future');
+    b.disabled = true;
+    try {
+      await updateClient(c, d => d.fees.push({ id: uid(), date, kind, amt, desc: $('#fdesc').value.trim() }));
+      toast(kind === 'bill' ? 'Bill added' : 'Payment recorded'); go('fees', id, true);
+    } catch (e) { b.disabled = false; toast(errText(e)); }
+  };
+  ACT.fdel = async b => {
+    const e = c.fees.find(x => x.id === b.dataset.i);
+    if (!e || !canWrite() || !confirm(`Delete this ${e.kind === 'bill' ? 'bill' : 'payment'} of ${inr(e.amt)}?`)) return;
+    try {
+      await updateClient(c, d => {
+        d.fees = d.fees.filter(x => x.id !== e.id);
+        for (const w of Object.values(d.work)) if (w.bill === e.id) delete w.bill;
+      });
+      toast('Entry deleted'); go('fees', id, true);
+    } catch (er) { toast(errText(er)); }
+  };
+  ACT.remindfee = () => go('wa', { id, back: 'fees', pick: 'fees' });
+}
+
+// ---------- WhatsApp message picker ----------
+function renderWa(a) {
+  const c = S.clients.find(x => x.id === a.id);
+  if (!c) return go('list');
+  const t = a.key ? findTask(a) : null, m = mobileOf(c);
+  const list = [...tpls()].sort((x, y) => (y.id === a.pick) - (x.id === a.pick));
+  let html = bar({ left: backBtn('Back', 'back'), title: 'WhatsApp' });
+  html += `<p class="foot" style="margin:0 34px 16px">To ${esc(c.name)}${m ? ' · +91 ' + m : ''}</p>`;
+  if (!m) html += `<div class="banner">Add a 10-digit mobile number to this client to send WhatsApp messages.</div>`;
+  html += `<div class="group">${list.map(x => `<button class="row" data-act="send" data-t="${esc(x.id)}"${m ? '' : ' disabled'}><span class="grow"><b class="tname">${esc(x.name)}</b><span class="preview">${esc(fillTpl(x.text, c, t))}</span></span><span class="chev">${I.chev}</span></button>`).join('')}
+    <button class="row link" data-act="send" data-t=""${m ? '' : ' disabled'}>Open chat without a message</button></div>
+  <p class="foot">Edit these messages in Settings → WhatsApp messages.</p>`;
+  app.innerHTML = html;
+  ACT.back = backTo;
+  ACT.send = b => { const x = tpls().find(y => y.id === b.dataset.t); openWhatsApp(c, x ? fillTpl(x.text, c, t) : ''); };
+}
+
+// ---------- bulk reminders ----------
+const BULK_SENT = new Set();
+let BULK_TPL = 'due';
+function renderBulk() {
+  const L = dueLists(), list = (L[DUEF] || L.open).filter(t => t.kind === 'task' && !DONE.has(t.status));
+  let html = bar({ left: backBtn('Due dates', 'back'), title: 'Send reminders' });
+  html += `<div class="group"><label class="row"><span class="grow">Message</span><select class="plain" id="btpl">${tpls().map(x => `<option value="${esc(x.id)}"${x.id === BULK_TPL ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label></div>`;
+  html += `<p class="foot">Each tap opens WhatsApp with the message filled in for that client. Send it, come back, and tap the next one.</p>`;
+  html += list.length ? `<div class="group">${list.map(t => {
+    const sent = BULK_SENT.has(t.c.id + '|' + t.key), m = mobileOf(t.c);
+    return `<div class="row lrow">${avatar(t.c.name)}<span class="lt"><b>${esc(t.c.name)}</b><small>${esc(t.title)} · ${esc(t.period)} · due ${fmtShort(t.due)}</small></span>${
+      m ? `<button class="sendbtn${sent ? ' sent' : ''}" data-act="bsend" data-k="${esc(t.key)}" data-id="${esc(t.c.id)}">${sent ? 'Sent' : 'Send'}</button>` : '<span class="tag">No mobile</span>'}</div>`;
+  }).join('')}</div>` : `<div class="empty"><b>No one to remind</b>There are no open filings in this list.</div>`;
+  app.innerHTML = html;
+  $('#btpl').onchange = e => { BULK_TPL = e.target.value; };
+  ACT.back = backTo;
+  ACT.bsend = b => {
+    const t = list.find(x => x.key === b.dataset.k && x.c.id === b.dataset.id), x = tpls().find(y => y.id === BULK_TPL) || tpls()[0];
+    if (!t) return;
+    openWhatsApp(t.c, fillTpl(x.text, t.c, t));
+    BULK_SENT.add(t.c.id + '|' + t.key); b.textContent = 'Sent'; b.classList.add('sent');
+  };
+}
+
+// ---------- portal login helper ----------
+function renderLogin(a) {
+  const c = S.clients.find(x => x.id === a.id);
+  const p = c && portalsOf(c).find(x => x.p === a.p);
+  if (!p) return backTo();
+  graceUntil = Date.now() + 180000;
+  let html = bar({ left: backBtn('Back', 'back'), title: `${p.name} login` });
+  html += `<div class="hero task-hero"><p class="eyebrow">${esc(c.name)}</p><h2 data-big>${esc(p.name)} portal</h2></div>`;
+  html += `<div class="group">
+    <div class="row"><div class="dcol"><div class="dlabel">User ID</div><div class="dval mono">${esc(p.user || 'Not saved')}</div></div>${p.user ? `<button class="copybtn" data-act="cp" data-w="user">Copy</button>` : ''}</div>
+    <div class="row"><div class="dcol"><div class="dlabel">Password</div><div class="dval" id="pv">${p.pass ? '••••••••' : 'Not saved'}</div></div>${p.pass ? `<button class="ibtn" data-act="peek" aria-label="Show password">${I.eye}</button><button class="copybtn" data-act="cp" data-w="pass">Copy</button>` : ''}</div>
+  </div>`;
+  html += `<div class="pad"><a class="btn primary" href="${p.url}" target="_blank" rel="noopener noreferrer" data-act="open">Open ${esc(p.name)} portal</a></div>`;
+  html += `<p class="foot" style="margin-top:16px">Copy the user ID, open the portal and paste it. Come back here, copy the password and paste that too. The app stays unlocked for 3 minutes while you switch.</p>`;
+  if (pwDays() && p.pass && c.pwd[p.pw]) html += `<p class="foot">Password last changed ${ago(c.pwd[p.pw])}.</p>`;
+  app.innerHTML = html;
+  ACT.back = () => { graceUntil = 0; backTo(); };
+  ACT.cp = async b => {
+    try { await navigator.clipboard.writeText(b.dataset.w === 'user' ? p.user : p.pass); b.textContent = 'Copied'; b.classList.add('done'); setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1500); }
+    catch { toast('Couldn’t copy'); }
+  };
+  ACT.peek = b => { const el = $('#pv'), hid = el.textContent.startsWith('•'); el.textContent = hid ? p.pass : '••••••••'; b.innerHTML = hid ? I.eyeOff : I.eye; };
+  // The link opens the portal itself; this just keeps the app unlocked meanwhile.
+  app.querySelector('[data-act="open"]').addEventListener('click', () => { graceUntil = Date.now() + 180000; }, true);
+}
+
+// ---------- message templates ----------
+function renderTemplates() {
+  const list = tpls().map(x => ({ ...x }));
+  const block = x => `<div data-tpl="${esc(x.id)}"><div class="group-h"><span>Message</span><button type="button" class="linkbtn danger" data-act="tdel">Remove</button></div><div class="group">
+    <label class="frow"><span class="flabel">Name</span><input class="finput" data-f="name" value="${esc(x.name)}"></label>
+    <label class="frow bare"><textarea class="finput" data-f="text" rows="4">${esc(x.text)}</textarea></label></div></div>`;
+  let html = bar({ left: `<button class="nav-btn" data-act="back">Cancel</button>`, title: 'WhatsApp messages', right: `<button class="nav-btn strong" data-act="save">Done</button>` });
+  html += `<div class="group-h">Signature</div><div class="group"><label class="frow"><span class="flabel">Firm name</span><input class="finput" id="firm" value="${esc(S.meta.firm || '')}" placeholder="e.g. Harshad Makwana & Co."></label></div>`;
+  html += `<p class="foot">Used for {firm} at the end of each message.</p>`;
+  html += `<div id="tl">${list.map(block).join('')}</div><div class="group"><button class="row addrow" data-act="tadd"><span class="plus">+</span>Add message</button></div>`;
+  html += `<p class="foot">Words in curly brackets are filled in for each client: ${TPL_TAGS.map(t => `{${t}}`).join(' ')}</p>`;
+  app.innerHTML = html;
+  ACT.back = backTo;
+  ACT.tadd = () => { $('#tl').insertAdjacentHTML('beforeend', block({ id: uid(), name: 'New message', text: 'Dear {name}, ' })); $('#tl [data-tpl]:last-child textarea').focus(); };
+  ACT.tdel = b => { if (confirm('Remove this message?')) b.closest('[data-tpl]').remove(); };
+  ACT.save = async b => {
+    if (!canWrite()) return;
+    const out = $$('[data-tpl]', app).map(el => ({ id: el.dataset.tpl, name: $('[data-f="name"]', el).value.trim() || 'Message', text: $('[data-f="text"]', el).value.trim() })).filter(x => x.text);
+    const prev = { templates: S.meta.templates, firm: S.meta.firm };
+    S.meta.templates = out; S.meta.firm = $('#firm').value.trim();
+    b.disabled = true;
+    try { await saveMeta(); toast('Saved'); backTo(); }
+    catch (e) { Object.assign(S.meta, prev); b.disabled = false; toast(errText(e)); }
+  };
+}
+
+// ---------- CSV (Excel) import / export ----------
+function parseCSV(text) {
+  const rows = []; let row = [], f = '', q = false;
+  text = text.replace(/^﻿/, '');
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ',') { row.push(f); f = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(f); rows.push(row); row = []; f = ''; }
+    else f += ch;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim()));
+}
+const CSV_COLS = {
+  name: ['name', 'client name', 'full name', 'legal name', 'client'], type: ['status', 'type', 'client type', 'category', 'constitution'],
+  fileNo: ['file no', 'file', 'file number'], group: ['group', 'family', 'group / family'], pan: ['pan', 'pan no', 'pan number'],
+  aadhaar: ['aadhaar', 'aadhar', 'aadhaar no', 'aadhar no', 'aadhaar number'], mobile: ['mobile', 'phone', 'mobile no', 'contact no', 'contact', 'mobile number'],
+  email: ['email', 'email id', 'e-mail'], dob: ['dob', 'date of birth', 'doi', 'date of incorporation', 'dob / doi'], address: ['address'],
+  gstin: ['gstin', 'gst no', 'gst number', 'gst'], gstUser: ['gst username', 'gst user', 'gst user id'], gstPass: ['gst password'],
+  itUser: ['it user id', 'income tax user id', 'it user'], itPass: ['it password', 'income tax password'],
+  tracesUser: ['traces user id', 'traces user'], tracesPass: ['traces password'], tan: ['tan', 'tan no'],
+  regNo: ['cin', 'llpin', 'cin / llpin', 'reg no', 'registration no'], contact: ['contact person'],
+  bankName: ['bank', 'bank name'], bankAcc: ['account no', 'bank account', 'account number', 'bank account no'], ifsc: ['ifsc', 'ifsc code'],
+  business: ['business name', 'trade name'], notes: ['notes', 'remarks'],
+};
+const TYPE_WORDS = [[/propriet|individual|person/i, 'Individual'], [/huf/i, 'HUF'], [/llp/i, 'LLP'], [/partner|firm/i, 'Partnership Firm'], [/company|pvt|private|limited|ltd/i, 'Company'], [/trust/i, 'Trust'], [/boi|body of ind/i, 'BOI'], [/aop|association|society/i, 'AOP']];
+function csvDate(v) {
+  if (!v) return '';
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v);
+  if (m) return ymd(+m[1], +m[2], +m[3]);
+  m = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/.exec(v);
+  if (!m) return null;
+  let y = +m[3]; if (y < 100) y += y > 30 ? 1900 : 2000;
+  const d = new Date(y, +m[2] - 1, +m[1]);
+  return d.getMonth() === +m[2] - 1 ? ymd(y, +m[2], +m[1]) : null;
+}
+function csvToClients(text) {
+  const rows = parseCSV(text);
+  if (rows.length < 2) throw new Error('The file has no client rows.');
+  const head = rows[0].map(h => h.trim().toLowerCase().replace(/[._]/g, ' ').replace(/\s+/g, ' '));
+  const col = Object.fromEntries(Object.entries(CSV_COLS).map(([k, names]) => [k, head.findIndex(h => names.includes(h))]));
+  if (col.name < 0) throw new Error('Couldn’t find a “Name” column in the first row.');
+  const seen = { pan: new Map(), gstin: new Map() };
+  return rows.slice(1).map((r, i) => {
+    const n = i + 2, get = k => col[k] >= 0 ? (r[col[k]] || '').trim() : '';
+    const c = tidy({}), errors = [], warns = [];
+    c.name = get('name').replace(/\s+/g, ' ');
+    const pan = NORM.id(get('pan')), rawType = get('type');
+    c.type = (TYPE_WORDS.find(([re]) => re.test(rawType)) || [])[1] || (PAN_RE.test(pan) && PAN_TO_TYPE[pan[3]]) || 'Individual';
+    for (const k of ['fileNo', 'group', 'address', 'itPass', 'tracesPass', 'bankName', 'notes', 'contact']) { const v = get(k); if (v) c[k] = v; }
+    if (pan) c.pan = pan;
+    const set = (k, norm) => { const v = get(k); if (v) c[k] = NORM[norm](v); };
+    set('aadhaar', 'aadhaar'); set('mobile', 'mobile'); set('email', 'lower'); set('tan', 'id'); set('regNo', 'id');
+    set('itUser', 'id'); set('tracesUser', 'up'); set('bankAcc', 'digits'); set('ifsc', 'id');
+    const dob = csvDate(get('dob'));
+    if (dob === null) errors.push(`Date “${get('dob')}” isn’t a valid date (use DD/MM/YYYY)`); else if (dob) c.dob = dob;
+    const gstins = get('gstin').split(/[;,\s]+/).map(NORM.id).filter(Boolean);
+    c.gst = gstins.map((g, j) => ({ gstin: g, user: j ? '' : get('gstUser'), pass: j ? '' : get('gstPass') }));
+    if (!gstins.length && (get('gstUser') || get('gstPass'))) c.gst = [{ gstin: '', user: get('gstUser'), pass: get('gstPass') }];
+    if (get('business') && PERSONAL.has(c.type)) c.businesses = [{ name: get('business'), nature: '', same: true, address: '', udyam: '' }];
+    if (!c.pan && gstins[0] && GSTIN_RE.test(gstins[0])) c.pan = gstins[0].slice(2, 12);
+    for (const k of ['itPass', 'tracesPass']) if (c[k]) c.pwd[k === 'itPass' ? 'it' : 'traces'] = todayStr();
+    c.gst.forEach(g => { if (g.pass && g.gstin) c.pwd['gst:' + g.gstin] = todayStr(); });
+    // Same checks as the edit screen.
+    const x = { type: c.type, name: c.name, pan: c.pan || '', dob: c.dob || '', self: undefined, biz: c.businesses.map(b => b.name), gstins };
+    const check = (rule, v) => { if (!v || !RULES[rule]) return; const res = RULES[rule](v, x); if (res?.level === 'err') errors.push(res.msg); else if (res?.level === 'warn') warns.push(res.msg); };
+    check('name', c.name || 'x'); if (!c.name) errors.push('Name is missing');
+    check('pan', c.pan); check('aadhaar', PERSONAL.has(c.type) && c.aadhaar); check('mobile', c.mobile); check('email', c.email);
+    check('dob', c.dob); check('tan', c.tan); check('regNo', c.regNo); check('ifsc', c.ifsc); check('bankAcc', c.bankAcc); check('itUser', c.itUser);
+    gstins.forEach(g => check('gstin', g));
+    if (c.pan) { if (seen.pan.has(c.pan)) errors.push(`Same PAN as row ${seen.pan.get(c.pan)}`); else seen.pan.set(c.pan, n); }
+    gstins.forEach(g => { if (seen.gstin.has(g)) errors.push(`Same GSTIN as row ${seen.gstin.get(g)}`); else seen.gstin.set(g, n); });
+    if (!PERSONAL.has(c.type)) delete c.aadhaar;
+    return { n, c, errors: [...new Set(errors)], warns };
+  });
+}
+const csvCell = v => {
+  let s = String(v ?? '');
+  if (/^[=+\-@]/.test(s)) s = "'" + s; // stop Excel treating a value as a formula
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+};
+const toCSV = rows => '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+function saveFile(name, text, type, done) {
+  const file = new File([text], name, { type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    suppressLock = true;
+    navigator.share({ files: [file], title: name }).then(done, er => { if (er.name !== 'AbortError') toast('Couldn’t share the file'); }).finally(() => { suppressLock = false; });
+  } else {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file); a.download = name; document.body.append(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    done?.();
+  }
+}
+function exportClientsCSV() {
+  const dmy = s => s ? s.split('-').reverse().join('/') : '';
+  const head = ['Name', 'Status', 'File no', 'Group', 'PAN', 'Aadhaar (masked)', 'Mobile', 'Email', 'DOB / DOI', 'Address', 'GSTIN', 'TAN', 'CIN / LLPIN', 'Business names', 'Contact person', 'Fees outstanding'];
+  const rows = [...S.clients].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(c => [
+    c.name, c.type, c.fileNo, c.group, c.pan, c.aadhaar ? 'XXXX XXXX ' + aadhaarDigits(c.aadhaar).slice(-4) : '', c.mobile, c.email, dmy(c.dob),
+    c.address, c.gst.map(g => g.gstin).filter(Boolean).join('; '), c.tan, c.regNo, c.businesses.map(b => b.name).filter(Boolean).join('; '), c.contact, feeTotals(c).due || '',
+  ]);
+  saveFile(`client-list-${todayStr()}.csv`, toCSV([head, ...rows]), 'text/csv', () => toast('Client list exported'));
+}
+function sampleCSV() {
+  const rows = [
+    ['Name', 'Status', 'PAN', 'Aadhaar', 'Mobile', 'Email', 'Date of birth', 'Address', 'GSTIN', 'GST username', 'GST password', 'IT password', 'TAN', 'CIN', 'Group', 'File no', 'Business name'],
+    ['Ramesh Kumar Patel', 'Individual', '', '', '9876543210', 'ramesh@example.com', '15/08/1980', '12 MG Road, Ahmedabad 380001', '', '', '', '', '', '', 'Patel family', '101', 'Patel Traders'],
+  ];
+  saveFile('client-import-sample.csv', toCSV(rows), 'text/csv');
+}
+function renderCsvImport(a) {
+  const good = a.rows.filter(r => !r.errors.length), bad = a.rows.filter(r => r.errors.length), warned = good.filter(r => r.warns.length);
+  let html = bar({ left: `<button class="nav-btn" data-act="back">Cancel</button>`, title: 'Import clients' });
+  html += `<div class="tiles"><div class="tile green"><b>${good.length}</b><span>Ready</span></div><div class="tile ${bad.length ? 'red' : ''}"><b>${bad.length}</b><span>Have errors</span></div><div class="tile ${warned.length ? 'amber' : ''}"><b>${warned.length}</b><span>Warnings</span></div></div>`;
+  html += good.length ? `<div class="pad"><button class="btn primary" data-act="go">Import ${plural(good.length, 'client')}</button></div><p class="foot" style="margin-top:12px">Rows with errors are skipped. Fix them in Excel and import the file again — clients already saved are recognised by PAN.</p>`
+    : `<p class="foot" style="margin-top:0">Nothing can be imported yet. Fix the rows below in Excel and try again.</p>`;
+  if (bad.length) html += `<div class="group-h">Skipped</div><div class="group">${bad.slice(0, 150).map(r => `<div class="row"><span class="grow">Row ${r.n} · ${esc(r.c.name || 'No name')}<small class="errtext">${esc(r.errors.join(' · '))}</small></span></div>`).join('')}</div>`;
+  if (warned.length) html += `<div class="group-h">Imported with warnings</div><div class="group">${warned.slice(0, 150).map(r => `<div class="row"><span class="grow">Row ${r.n} · ${esc(r.c.name)}<small class="warntext">${esc(r.warns.join(' · '))}</small></span></div>`).join('')}</div>`;
+  app.innerHTML = html;
+  ACT.back = backTo;
+  ACT.go = async b => {
+    if (!canWrite()) return;
+    b.disabled = true;
+    let n = 0;
+    try {
+      for (const r of good) {
+        const now = Date.now();
+        await saveClient({ ...r.c, id: uid(), created: now, updated: now });
+        b.textContent = `Importing ${++n} of ${good.length}…`;
+      }
+      toast(`Imported ${plural(n, 'client')}`); go('list');
+    } catch (e) { b.disabled = false; b.textContent = `Import remaining clients`; toast(`${n} imported. ${errText(e)}`); good.splice(0, n); }
+  };
+}
+
+// ---------- dashboard ----------
+function renderDash() {
+  const L = dueLists(), today = L.today, monthEnd = ymd(+today.slice(0, 4), +today.slice(5, 7), new Date(+today.slice(0, 4), +today.slice(5, 7), 0).getDate());
+  const fees = S.clients.map(c => [c, feeTotals(c)]), outstanding = fees.reduce((s, [, f]) => s + Math.max(0, f.due), 0);
+  const pw = L.open.filter(t => t.kind === 'pw' && t.due <= addDays(today, 7));
+  let html = bar({ left: backBtn('Clients', 'back'), title: 'Overview', big: true });
+  html += `<h1 class="large" data-big>Overview</h1>`;
+  html += `<div class="tiles two">
+    <button class="tile" data-act="list"><b>${S.clients.length}</b><span>Clients</span></button>
+    <button class="tile red" data-act="due" data-f="overdue"><b>${L.overdue.length}</b><span>Overdue filings</span></button>
+    <button class="tile amber" data-act="due" data-f="week"><b>${L.week.length}</b><span>Due this week</span></button>
+    <div class="tile blue"><b>${inr(outstanding)}</b><span>Fees outstanding</span></div></div>`;
+  if (pw.length) html += `<button class="banner" data-act="due" data-f="open">${plural(pw.length, 'portal password')} due for a change.</button>`;
+  // filings due this month, by return
+  const month = collectDue(monthEnd).filter(t => t.kind === 'task' && t.due.slice(0, 7) === today.slice(0, 7));
+  const byRet = {};
+  for (const t of month) { const k = t.def.name; (byRet[k] ||= { done: 0, total: 0 }).total++; if (DONE.has(t.status)) byRet[k].done++; }
+  const rets = Object.entries(byRet);
+  if (rets.length) html += `<div class="group-h">${MON[+today.slice(5, 7) - 1]} filings</div><div class="group">${rets.map(([k, v]) => `<div class="row stat"><span class="grow">${esc(k)}<span class="bar-track"><span class="bar-fill" style="width:${Math.round(v.done / v.total * 100)}%"></span></span></span><span class="amt">${v.done}/${v.total}</span></div>`).join('')}</div>`;
+  // clients by status
+  const counts = {}; S.clients.forEach(c => { counts[c.type] = (counts[c.type] || 0) + 1; });
+  const max = Math.max(1, ...Object.values(counts));
+  html += `<div class="group-h">Clients by status</div><div class="group">${Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row stat"><span class="grow">${esc(k)}<span class="bar-track"><span class="bar-fill" style="width:${Math.round(v / max * 100)}%"></span></span></span><span class="amt">${v}</span></div>`).join('') || '<div class="row"><span class="grow">No clients yet</span></div>'}</div>`;
+  const top = fees.filter(([, f]) => f.due > 0).sort((a, b) => b[1].due - a[1].due).slice(0, 5);
+  if (top.length) html += `<div class="group-h">Highest outstanding fees</div><div class="group">${top.map(([c, f]) => `<button class="row lrow" data-act="open" data-id="${esc(c.id)}">${avatar(c.name)}<span class="lt"><b>${esc(c.name)}</b><small>Billed ${inr(f.billed)}</small></span><span class="amt due">${inr(f.due)}</span></button>`).join('')}</div>`;
+  const recent = [...S.clients].sort((a, b) => (b.updated || 0) - (a.updated || 0)).slice(0, 5);
+  if (recent.length) html += `<div class="group-h">Recently updated</div><div class="group">${recent.map(c => `<button class="row lrow" data-act="open" data-id="${esc(c.id)}">${avatar(c.name)}<span class="lt"><b>${esc(c.name)}</b><small>${fmtDate(c.updated)}</small></span><span class="chev">${I.chev}</span></button>`).join('')}</div>`;
+  app.innerHTML = html;
+  ACT.back = () => goBack('list');
+  ACT.list = () => goBack('list');
+  ACT.due = b => { DUEF = b.dataset.f; go('due'); };
+  ACT.open = b => go('detail', b.dataset.id);
 }
 
 // ---------- start ----------

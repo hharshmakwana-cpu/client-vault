@@ -29,11 +29,11 @@ function toB64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s +
 function fromB64(s) { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
 function readLS(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
 function writeLS(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch {} }
-const fmtDate = t => t ? new Date(t).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+const fmtDate = t => t ? new Date(typeof t === 'string' ? t + 'T00:00:00' : t).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
 const fmtTime = t => new Date(t).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 let toastTimer;
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600); }
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2800); }
 
 // ---------- local key-value store (IndexedDB) ----------
 const store = (() => {
@@ -82,6 +82,9 @@ const AUTH_MSG = {
   INVALID_LOGIN_CREDENTIALS: 'Wrong email or password.', INVALID_EMAIL: 'That email address looks wrong.',
   MISSING_PASSWORD: 'Enter your password.', USER_DISABLED: 'This account is disabled.',
   TOO_MANY_ATTEMPTS_TRY_LATER: 'Too many attempts. Try again in a few minutes.',
+  EXPIRED_OOB_CODE: 'This reset link has expired. Request a new one from the sign-in screen.',
+  INVALID_OOB_CODE: 'This reset link was already used or is incomplete. Request a new one from the sign-in screen.',
+  WEAK_PASSWORD: 'Choose a stronger password (at least 8 characters).',
 };
 
 function firebaseBackend() {
@@ -131,6 +134,8 @@ function firebaseBackend() {
       saveAuth({ uid: j.localId, email: j.email, refreshToken: j.refreshToken, idToken: j.idToken, exp: Date.now() + j.expiresIn * 1000 });
     },
     async resetPassword(email) { await post(`${ID}:sendOobCode?key=${CFG.apiKey}`, { requestType: 'PASSWORD_RESET', email }); },
+    async checkResetCode(oobCode) { return (await post(`${ID}:resetPassword?key=${CFG.apiKey}`, { oobCode })).email; },
+    async confirmReset(oobCode, newPassword) { await post(`${ID}:resetPassword?key=${CFG.apiKey}`, { oobCode, newPassword }); },
     signOut() { saveAuth(null); },
     async getVault() { const d = await fs('GET', base()); return d && fromDoc(d); },
     async putVault(f) { await fs('PATCH', `${base()}?${mask(Object.keys(f))}`, { fields: toFields(f) }); },
@@ -149,10 +154,11 @@ function firebaseBackend() {
 
 // Demo mode: same interface, stored in this browser only. Used when config.js is empty.
 function demoBackend() {
+  const noReset = async () => { throw new Error('Password reset isn’t available in demo mode.'); };
   return {
     demo: true,
     user: { uid: 'demo', email: 'Demo mode' },
-    async signIn() {}, async resetPassword() {}, signOut() {},
+    async signIn() {}, async resetPassword() {}, checkResetCode: noReset, confirmReset: noReset, signOut() {},
     async getVault() { return (await store.get('demo:vault')) || null; },
     async putVault(f) { await store.set('demo:vault', { ...((await store.get('demo:vault')) || {}), ...f }); },
     async listClients() { return Object.values((await store.get('demo:clients')) || {}); },
@@ -163,34 +169,42 @@ function demoBackend() {
 const DB = DEMO ? demoBackend() : firebaseBackend();
 const cacheKey = () => 'cache:' + DB.user.uid;
 
+// ---------- reference data ----------
+// Taxpayer status as per the Income-tax Act, and the 4th character of the PAN for each.
+const TYPES = ['Individual', 'HUF', 'Partnership Firm', 'LLP', 'Company', 'Trust', 'AOP', 'BOI', 'Local Authority', 'Artificial Juridical Person', 'Government'];
+const TYPE_PAN = { Individual: 'P', HUF: 'H', 'Partnership Firm': 'F', LLP: 'F', Company: 'C', Trust: 'T', AOP: 'A', BOI: 'B', 'Local Authority': 'L', 'Artificial Juridical Person': 'J', Government: 'G' };
+const PAN_STATUS = { P: 'Individual', H: 'HUF', F: 'Firm / LLP', C: 'Company', T: 'Trust', A: 'AOP', B: 'BOI', L: 'Local Authority', J: 'Artificial Juridical Person', G: 'Government' };
+const PAN_TO_TYPE = { P: 'Individual', H: 'HUF', F: 'Partnership Firm', C: 'Company', T: 'Trust', A: 'AOP', B: 'BOI', L: 'Local Authority', J: 'Artificial Juridical Person', G: 'Government' };
+// Only individuals and HUFs carry on business under a trade name; every other status is itself the entity.
+const PERSONAL = new Set(['Individual', 'HUF']);
+const REG_LABEL = { Company: 'CIN', LLP: 'LLPIN', 'Partnership Firm': 'Firm reg. no.', Trust: 'Registration no.', AOP: 'Registration no.', BOI: 'Registration no.' };
+const GST_STATES = { '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh', '05': 'Uttarakhand', '06': 'Haryana', '07': 'Delhi', '08': 'Rajasthan', '09': 'Uttar Pradesh', '10': 'Bihar', '11': 'Sikkim', '12': 'Arunachal Pradesh', '13': 'Nagaland', '14': 'Manipur', '15': 'Mizoram', '16': 'Tripura', '17': 'Meghalaya', '18': 'Assam', '19': 'West Bengal', '20': 'Jharkhand', '21': 'Odisha', '22': 'Chhattisgarh', '23': 'Madhya Pradesh', '24': 'Gujarat', '25': 'Daman & Diu', '26': 'Dadra & Nagar Haveli and Daman & Diu', '27': 'Maharashtra', '28': 'Andhra Pradesh (old)', '29': 'Karnataka', '30': 'Goa', '31': 'Lakshadweep', '32': 'Kerala', '33': 'Tamil Nadu', '34': 'Puducherry', '35': 'Andaman & Nicobar Islands', '36': 'Telangana', '37': 'Andhra Pradesh', '38': 'Ladakh', '97': 'Other Territory', '99': 'Centre Jurisdiction' };
+const STATE2 = new Set('AN AP AR AS BR CH CG CT DD DL DN GA GJ HP HR JH JK KA KL LA LD MH ML MN MP MZ NL OD OR PB PY RJ SK TG TN TR TS UK UP UR UT WB'.split(' '));
+const CIN_CLASS = { PLC: 'Public company', PTC: 'Private company', OPC: 'One person company', NPL: 'Section 8 company', GOI: 'Central Govt. company', SGC: 'State Govt. company', FLC: 'Foreign subsidiary (public)', FTC: 'Foreign subsidiary (private)', GAP: 'Guarantee company (public)', GAT: 'Guarantee company (private)', ULL: 'Unlimited company (public)', ULT: 'Unlimited company (private)' };
+
 // ---------- client fields ----------
-const TYPES = ['Individual', 'HUF', 'Proprietorship', 'Partnership Firm', 'LLP', 'Company', 'Trust', 'AOP / BOI', 'Other'];
-const PERSONAL = new Set(['Individual', 'HUF', 'Proprietorship']);
-const addrLabel = t => PERSONAL.has(t) ? 'Home address' : 'Registered office';
-const dobLabel = t => t === 'Individual' || t === 'Proprietorship' ? 'Date of birth' : t === 'HUF' ? 'Date of formation' : 'Date of incorporation';
+const addrLabel = t => t === 'Individual' ? 'Home address' : t === 'HUF' ? 'HUF address' : 'Registered office';
+const dobLabel = t => t === 'Individual' ? 'Date of birth' : t === 'Company' || t === 'LLP' ? 'Date of incorporation' : 'Date of formation';
 const SECTIONS = [
   { title: 'Basic details', fields: [
-    { k: 'name', label: 'Name', ph: 'Required — as per PAN' },
-    { k: 'type', label: 'Type', kind: 'select', options: TYPES },
+    { k: 'name', label: t => PERSONAL.has(t) ? 'Name' : 'Legal name', rule: 'name', ph: 'Required — exactly as on PAN' },
+    { k: 'type', label: 'Status', kind: 'select' },
     { k: 'fileNo', label: 'File no.', ph: 'Optional' },
+    { k: 'contact', label: 'Contact person', ph: 'Director / partner / trustee', show: t => !PERSONAL.has(t) },
     { k: 'mobile', label: 'Mobile', input: 'tel', rule: 'mobile', norm: 'mobile', ph: '10-digit number', link: 'tel:' },
     { k: 'email', label: 'Email', input: 'email', rule: 'email', norm: 'lower', link: 'mailto:' },
     { k: 'dob', label: dobLabel, input: 'date', rule: 'dob' },
-    { k: 'address', label: addrLabel, kind: 'textarea', ph: 'Address with PIN code' },
+    { k: 'address', label: addrLabel, kind: 'textarea', rule: 'address', ph: 'Address with 6-digit PIN code' },
   ] },
   { title: 'Identity', fields: [
     { k: 'pan', label: 'PAN', up: true, max: 10, rule: 'pan', norm: 'id', ph: 'ABCPE1234F' },
-    { k: 'aadhaar', label: 'Aadhaar', input: 'numeric', max: 14, rule: 'aadhaar', norm: 'aadhaar', secret: true, ph: '12 digits' },
+    { k: 'aadhaar', label: t => t === 'HUF' ? 'Karta’s Aadhaar' : 'Aadhaar', input: 'numeric', max: 14, rule: 'aadhaar', norm: 'aadhaar', secret: true, ph: '12 digits', show: t => PERSONAL.has(t) },
+    { k: 'regNo', label: t => REG_LABEL[t] || 'Registration no.', up: true, rule: 'regNo', norm: 'id', ph: t => t === 'Company' ? 'U74999GJ2015PTC123456' : t === 'LLP' ? 'AAB-1234' : 'If registered', show: t => !!REG_LABEL[t] },
     { k: 'tan', label: 'TAN', up: true, max: 10, rule: 'tan', norm: 'id', ph: 'If they deduct TDS' },
   ] },
   { title: 'Income Tax portal', url: 'https://eportal.incometax.gov.in/iec/foservices/#/login', fields: [
-    { k: 'itUser', label: 'User ID', up: true, norm: 'id', ph: 'Usually the PAN' },
+    { k: 'itUser', label: 'User ID', up: true, rule: 'itUser', norm: 'id', ph: 'The PAN' },
     { k: 'itPass', label: 'Password', secret: true },
-  ] },
-  { title: 'GST portal', url: 'https://services.gst.gov.in/services/login', fields: [
-    { k: 'gstin', label: 'GSTIN', up: true, max: 15, rule: 'gstin', norm: 'id', ph: '24ABCPE1234F1Z5' },
-    { k: 'gstUser', label: 'Username' },
-    { k: 'gstPass', label: 'Password', secret: true },
   ] },
   { title: 'TRACES', url: 'https://www.tdscpc.gov.in/app/login.xhtml', fields: [
     { k: 'tracesUser', label: 'User ID', up: true, norm: 'up' },
@@ -203,13 +217,15 @@ const SECTIONS = [
   ] },
   { title: 'Notes', fields: [{ k: 'notes', label: 'Notes', kind: 'textarea', bare: true, ph: 'Anything else about this client' }] },
 ];
-const lab = (f, type) => typeof f.label === 'function' ? f.label(type) : f.label;
+const FIELDS = SECTIONS.flatMap(s => s.fields);
+const fnv = (v, t) => typeof v === 'function' ? v(t) : v;
+const shows = (f, t) => !f.show || f.show(t);
+const GST_URL = 'https://services.gst.gov.in/services/login';
 
 // ---------- validation ----------
-// Each rule gets the normalised value and the client context; returns null or {level, msg}.
-const err = msg => ({ level: 'err', msg }), warn = msg => ({ level: 'warn', msg });
-const PAN_TYPE = { Individual: 'P', HUF: 'H', Proprietorship: 'P', 'Partnership Firm': 'F', LLP: 'F', Company: 'C', Trust: 'T', 'AOP / BOI': 'AB' };
-const PAN_HOLDER = { P: 'an individual', H: 'a HUF', F: 'a firm or LLP', C: 'a company', T: 'a trust', A: 'an AOP', B: 'a BOI', G: 'a government body', J: 'an artificial juridical person', L: 'a local authority' };
+// Each rule gets the normalised value and the form context; returns null or {level, msg}.
+// 'err' blocks saving, 'warn' asks before saving, 'ok' is just a confirmation.
+const err = msg => ({ level: 'err', msg }), warn = msg => ({ level: 'warn', msg }), ok = msg => ({ level: 'ok', msg });
 const VD = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,4,0,1,2,8,9,5,6,7],[4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],[8,7,6,5,9,3,2,1,0,4],[9,8,7,6,5,4,3,2,1,0]];
 const VP = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],[8,9,1,6,0,4,3,5,2,7],[9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]];
 const verhoeff = n => [...n].reverse().reduce((c, d, i) => VD[c][VP[i % 8][+d]], 0) === 0;
@@ -226,35 +242,104 @@ function normMobile(v) {
   return d;
 }
 const PAN_RE = /^[A-Z]{5}\d{4}[A-Z]$/;
+const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+const initialsOf = s => (s || '').toUpperCase().replace(/[^A-Z\s]/g, ' ').split(/\s+/).filter(Boolean).map(w => w[0]);
+const others = c => S.clients.filter(x => x.id !== c.self);
+const aadhaarDigits = v => (v || '').replace(/\D/g, '');
 const RULES = {
-  mobile: v => /^[6-9]\d{9}$/.test(normMobile(v)) ? null : err('Enter a 10-digit Indian mobile number'),
-  email: v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v) ? null : err('This email address looks incomplete'),
-  dob: v => { const d = new Date(v); return isNaN(d) || d > new Date() || d.getFullYear() < 1900 ? err('Check this date') : null; },
+  name: (v, c) => v.length < 2 ? err('Enter the full name')
+    : c.type === 'Individual' && /\d/.test(v) ? warn('A person’s name usually has no numbers') : null,
+  mobile: v => /^[6-9]\d{9}$/.test(normMobile(v)) ? null : err('Enter a 10-digit Indian mobile number (starts with 6–9)'),
+  email: v => /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/.test(v) ? null : err('Enter a valid email address'),
+  dob: (v, c) => {
+    const d = new Date(v + 'T00:00:00');
+    if (isNaN(d)) return err('Enter a valid date');
+    if (d > new Date()) return err('This date is in the future');
+    if (d.getFullYear() < 1850) return err('Check the year');
+    if (c.type === 'Individual' && (Date.now() - d) / 31557600000 > 110) return warn('That makes the person over 110 — check the year');
+    return null;
+  },
+  address: v => /(^|\D)[1-9]\d{2}\s?\d{3}(\D|$)/.test(v) ? null : warn('Add the 6-digit PIN code'),
   pan: (v, c) => {
-    if (!PAN_RE.test(v)) return err('PAN has 10 characters, like ABCPE1234F');
-    if (!PAN_HOLDER[v[3]]) return err(`4th letter “${v[3]}” isn’t a valid PAN holder type`);
-    const exp = PAN_TYPE[c.type];
-    if (exp && !exp.includes(v[3])) return warn(`This PAN belongs to ${PAN_HOLDER[v[3]]}, but the type is ${c.type}`);
-    return null;
+    if (!PAN_RE.test(v)) return err('PAN is 5 letters, 4 digits, 1 letter (e.g. ABCPE1234F)');
+    const status = PAN_STATUS[v[3]];
+    if (!status) return err(`4th letter “${v[3]}” isn’t a valid PAN status`);
+    const exp = TYPE_PAN[c.type];
+    if (exp && exp !== v[3]) {
+      if (c.type === 'Trust' && v[3] === 'A') return warn('4th letter A means AOP — some trusts hold an AOP PAN, but please check');
+      return err(`4th letter ${v[3]} means ${status}, but the status is ${c.type}`);
+    }
+    const dup = others(c).find(x => x.pan === v);
+    if (dup) return err(`This PAN is already saved for ${dup.name}`);
+    if (c.name && !initialsOf(c.name).includes(v[4])) return warn(`5th letter ${v[4]} should be the first letter of the ${c.type === 'Individual' ? 'surname' : 'name'} — check the name and PAN`);
+    return ok(`Valid · ${status}`);
   },
-  aadhaar: v => {
-    const d = v.replace(/\s/g, '');
+  aadhaar: (v, c) => {
+    const d = aadhaarDigits(v);
     if (!/^\d{12}$/.test(d)) return err('Aadhaar has 12 digits');
-    if (!/^[2-9]/.test(d) || !verhoeff(d)) return err('This isn’t a valid Aadhaar number — check for a typo');
+    if (!/^[2-9]/.test(d)) return err('Aadhaar never starts with 0 or 1');
+    if (!verhoeff(d)) return err('This isn’t a valid Aadhaar number — check for a typo');
+    const dup = others(c).find(x => x.type === c.type && aadhaarDigits(x.aadhaar) === d);
+    if (dup) return err(`This Aadhaar is already saved for ${dup.name}`);
+    return ok('Valid');
+  },
+  regNo: (v, c) => {
+    if (c.type === 'Company') {
+      const m = /^([LU])(\d{5})([A-Z]{2})(\d{4})([A-Z]{3})(\d{6})$/.exec(v);
+      if (!m) return err('CIN has 21 characters (e.g. U74999GJ2015PTC123456)');
+      if (!CIN_CLASS[m[5]]) return err(`“${m[5]}” isn’t a valid company class (PTC, PLC, OPC, NPL…)`);
+      const y = +m[4];
+      if (y < 1850 || y > new Date().getFullYear()) return err(`Year ${y} in the CIN isn’t possible`);
+      const dup = others(c).find(x => x.regNo === v);
+      if (dup) return err(`This CIN is already saved for ${dup.name}`);
+      if (!STATE2.has(m[3])) return warn(`“${m[3]}” isn’t a state code we recognise`);
+      if (c.dob && +c.dob.slice(0, 4) !== y) return warn(`CIN shows incorporation in ${y}, but the date entered is in ${c.dob.slice(0, 4)}`);
+      return ok(`${m[1] === 'L' ? 'Listed' : 'Unlisted'} · ${CIN_CLASS[m[5]]} · ${y}`);
+    }
+    if (c.type === 'LLP') {
+      if (!/^[A-Z]{3}-\d{4}$/.test(v)) return err('LLPIN is 3 letters, a hyphen and 4 digits (e.g. AAB-1234)');
+      const dup = others(c).find(x => x.regNo === v);
+      return dup ? err(`This LLPIN is already saved for ${dup.name}`) : null;
+    }
     return null;
   },
-  tan: v => /^[A-Z]{4}\d{5}[A-Z]$/.test(v) ? null : err('TAN has 10 characters, like ABCD12345E'),
+  tan: (v, c) => {
+    if (!/^[A-Z]{4}\d{5}[A-Z]$/.test(v)) return err('TAN is 4 letters, 5 digits, 1 letter (e.g. AHMR12345B)');
+    const dup = others(c).find(x => x.tan === v);
+    if (dup) return err(`This TAN is already saved for ${dup.name}`);
+    const names = [c.name, ...c.biz].join(' ');
+    if (names.trim() && !initialsOf(names).includes(v[3])) return warn(`TAN’s 4th letter ${v[3]} should be the first letter of the deductor’s name`);
+    return null;
+  },
+  itUser: (v, c) => {
+    if (PAN_RE.test(c.pan) && v !== c.pan) return warn('The Income Tax login ID is the PAN — this doesn’t match');
+    if (!PAN_RE.test(v)) return warn('The Income Tax login ID is normally the PAN');
+    return null;
+  },
   gstin: (v, c) => {
-    if (!/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(v)) return err('GSTIN has 15 characters, like 24ABCPE1234F1Z5');
-    const st = +v.slice(0, 2);
-    if (!((st >= 1 && st <= 38) || st === 97 || st === 99)) return err('The first 2 digits aren’t a valid state code');
-    if (gstinCheckDigit(v) !== v[14]) return err('The last character doesn’t match — check for a typo');
-    if (PAN_RE.test(c.pan || '') && v.slice(2, 12) !== c.pan) return warn('This GSTIN doesn’t contain the client’s PAN');
-    return null;
+    if (!GSTIN_RE.test(v)) return err('GSTIN is 15 characters: state code + PAN + entity no. + Z + check (e.g. 24ABCPE1234F1Z5)');
+    const st = GST_STATES[v.slice(0, 2)];
+    if (!st) return err(`${v.slice(0, 2)} isn’t a valid GST state code`);
+    if (gstinCheckDigit(v) !== v[14]) return err('Last character (check digit) is wrong — check for a typo');
+    const inner = v.slice(2, 12);
+    if (PAN_RE.test(c.pan) && inner !== c.pan) return err(`This GSTIN is for PAN ${inner}, not ${c.pan}`);
+    if (!PAN_RE.test(c.pan)) {
+      if (!PAN_STATUS[inner[3]]) return err('The PAN inside this GSTIN isn’t valid');
+      if (TYPE_PAN[c.type] && TYPE_PAN[c.type] !== inner[3]) return err(`This GSTIN is for ${PAN_STATUS[inner[3]]}, but the status is ${c.type}`);
+    }
+    if (c.gstins.filter(g => g === v).length > 1) return err('This GSTIN is entered twice');
+    const dup = others(c).find(x => (x.gst || []).some(g => g.gstin === v));
+    if (dup) return err(`This GSTIN is already saved for ${dup.name}`);
+    return ok(`${st}${PAN_RE.test(c.pan) ? ' · PAN matches' : ''}`);
   },
-  ifsc: v => /^[A-Z]{4}0[A-Z0-9]{6}$/.test(v) ? null : err('IFSC has 11 characters, like SBIN0001234'),
+  gstUser: v => /^[A-Za-z0-9._-]{8,15}$/.test(v) ? null : warn('GST portal usernames are usually 8–15 letters, numbers, . _ or -'),
+  ifsc: v => /^[A-Z]{4}0[A-Z0-9]{6}$/.test(v) ? null : err('IFSC is 4 letters, 0, then 6 letters/digits (e.g. SBIN0001234)'),
   bankAcc: v => /^\d{9,18}$/.test(v) ? null : err('Account number should be 9 to 18 digits'),
-  udyam: v => /^UDYAM-[A-Z]{2}-\d{2}-\d{7}$/.test(v) ? null : err('Format: UDYAM-GJ-01-1234567'),
+  udyam: v => {
+    const m = /^UDYAM-([A-Z]{2})-(\d{2})-(\d{7})$/.exec(v);
+    if (!m) return err('Udyam number looks like UDYAM-GJ-01-1234567');
+    return STATE2.has(m[1]) ? null : warn(`“${m[1]}” isn’t a state code we recognise`);
+  },
 };
 const NORM = {
   id: v => v.replace(/\s+/g, '').toUpperCase(),
@@ -314,7 +399,15 @@ async function applyMeta() {
   S.meta = S.vault.metaCt ? await decJSON(S.key, { iv: S.vault.metaIv, ct: S.vault.metaCt }) : {};
   S.meta.customFields = Array.isArray(S.meta.customFields) ? S.meta.customFields : [];
 }
-function tidy(c) { c.custom ||= {}; c.extra ||= []; c.businesses ||= []; return c; }
+// Brings records saved by older versions of the app up to the current shape.
+function tidy(c) {
+  c.custom ||= {}; c.extra ||= []; c.businesses ||= [];
+  if (!c.gst) c.gst = c.gstin || c.gstUser || c.gstPass ? [{ gstin: c.gstin || '', user: c.gstUser || '', pass: c.gstPass || '' }] : [];
+  delete c.gstin; delete c.gstUser; delete c.gstPass;
+  if (c.type === 'Proprietorship') c.type = 'Individual';
+  if (c.type === 'AOP / BOI') c.type = c.pan?.[3] === 'B' ? 'BOI' : 'AOP';
+  return c;
+}
 async function applyRecs(recs) {
   const prev = new Map(S.clients.map(c => [c.id, c]));
   const clients = [], map = new Map();
@@ -490,6 +583,7 @@ function renderSignIn(msg) {
       <button class="btn primary" id="go" type="submit">Sign in</button>
       <button class="btn plainbtn" type="button" data-act="forgot">Forgot password?</button>
       <p class="err" id="err" role="alert">${esc(msg || '')}</p>
+      <p class="hint center" id="hint" aria-live="polite"></p>
     </form>`);
   $('#f').onsubmit = async e => {
     e.preventDefault();
@@ -501,11 +595,54 @@ function renderSignIn(msg) {
       $('#err').textContent = ex instanceof TypeError ? 'No internet connection.' : ex.message;
     }
   };
-  ACT.forgot = async () => {
+  ACT.forgot = async t => {
     const email = $('#em').value.trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { $('#err').textContent = 'Enter your email above first.'; return $('#em').focus(); }
-    try { await DB.resetPassword(email); $('#err').textContent = ''; toast('Password reset link sent. Check your email.'); }
-    catch (ex) { $('#err').textContent = ex instanceof TypeError ? 'No internet connection.' : ex.message; }
+    if (!email || RULES.email(email)) { $('#err').textContent = 'Enter your email above first.'; return $('#em').focus(); }
+    t.disabled = true;
+    try {
+      await DB.resetPassword(email);
+      $('#err').textContent = '';
+      $('#hint').textContent = 'Reset link sent — check your inbox and spam folder. Open the newest email only: each new request cancels the earlier links.';
+      // Each new email invalidates the previous link, so don't let repeated taps send more.
+      let s = 60;
+      const tick = () => { if (!document.body.contains(t)) return; if (--s > 0) { t.textContent = `Resend link in ${s}s`; setTimeout(tick, 1000); } else { t.textContent = 'Forgot password?'; t.disabled = false; } };
+      tick();
+    } catch (ex) { $('#err').textContent = ex instanceof TypeError ? 'No internet connection.' : ex.message; t.disabled = false; }
+  };
+}
+
+// Opened from the link in a password-reset email (?mode=resetPassword&oobCode=…).
+async function renderReset(code) {
+  const done = () => { history.replaceState(null, '', location.pathname); DB.user ? openVault() : renderSignIn(); };
+  renderLoading('Checking your reset link…');
+  let email;
+  try { email = await DB.checkResetCode(code); }
+  catch (e) {
+    lockScreen('Link not valid', esc(e instanceof TypeError ? 'No internet connection.' : e.message), `<div class="stack"><button class="btn primary" data-act="done">Back to sign in</button></div>`);
+    ACT.done = done; return;
+  }
+  lockScreen('Choose a new password', `For ${esc(email)}`, `
+    <form id="f" class="stack" autocomplete="off">
+      <input type="email" autocomplete="username" value="${esc(email)}" hidden>
+      <input class="field" id="p1" type="password" placeholder="New sign-in password" autocomplete="new-password">
+      <input class="field" id="p2" type="password" placeholder="Confirm new password" autocomplete="new-password">
+      <button class="btn primary" id="go" type="submit">Save new password</button>
+      <p class="err" id="err" role="alert"></p>
+      <p class="hint">This changes the password you sign in with. Your master password and client data are not affected.</p>
+    </form>`);
+  $('#f').onsubmit = async e => {
+    e.preventDefault();
+    const a = $('#p1').value, er = $('#err'), btn = $('#go');
+    if (a.length < 8) return (er.textContent = 'Use at least 8 characters.');
+    if (a !== $('#p2').value) return (er.textContent = 'Passwords don’t match.');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      await DB.confirmReset(code, a);
+      writeLS('cv-email', email);
+      DB.signOut();
+      toast('Password changed. Sign in with your new password.');
+      done();
+    } catch (ex) { btn.disabled = false; btn.textContent = 'Save new password'; er.textContent = ex instanceof TypeError ? 'No internet connection.' : ex.message; }
   };
 }
 
@@ -632,7 +769,8 @@ function renderUnlockMsg(msg) { renderUnlock('pw'); $('#err').textContent = msg;
 
 // ---------- list ----------
 function haystack(c) {
-  const parts = [c.name, c.pan, c.gstin, c.mobile, c.email, c.fileNo, c.tan, c.itUser, c.gstUser, c.type];
+  const parts = [c.name, c.pan, c.mobile, c.email, c.fileNo, c.tan, c.itUser, c.type, c.regNo, c.contact];
+  for (const g of c.gst) parts.push(g.gstin, g.user);
   for (const b of c.businesses) parts.push(b.name, b.nature, b.udyam);
   for (const f of S.meta.customFields) if (!f.secret && c.custom[f.id]) parts.push(c.custom[f.id]);
   for (const x of c.extra) if (!x.secret) parts.push(x.label, x.value);
@@ -651,7 +789,7 @@ function renderList() {
   }) + `
     <h1 class="large">Clients</h1>
     <div class="search">${I.search}<input id="q" type="search" placeholder="Name, PAN, GSTIN, mobile, business…" value="${esc(Q)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Search clients"></div>
-    <div class="chips" id="chips" role="tablist" aria-label="Filter by type"></div>
+    <div class="chips" id="chips" role="tablist" aria-label="Filter by status"></div>
     ${banner}<div id="list"></div>`;
   drawList();
   $('#q').oninput = e => { Q = e.target.value; drawList(); };
@@ -667,7 +805,7 @@ function drawList() {
   const q = Q.trim().toLowerCase();
   const all = [...S.clients].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'en', { sensitivity: 'base' }));
   const counts = {}; all.forEach(c => { counts[c.type || 'Other'] = (counts[c.type || 'Other'] || 0) + 1; });
-  const types = TYPES.filter(t => counts[t]);
+  const types = [...TYPES, ...Object.keys(counts).filter(t => !TYPES.includes(t))].filter(t => counts[t]);
   if (F !== 'All' && !counts[F]) F = 'All';
   $('#chips').hidden = types.length < 2;
   $('#chips').innerHTML = [['All', all.length], ...types.map(t => [t, counts[t]])].map(([t, n]) =>
@@ -675,13 +813,13 @@ function drawList() {
   const shown = all.filter(c => (F === 'All' || (c.type || 'Other') === F) && (!q || haystack(c).includes(q)));
   const el = $('#list');
   if (!all.length) { el.innerHTML = `<div class="empty"><b>No clients yet</b>Tap + to add your first client.</div>`; return; }
-  if (!shown.length) { el.innerHTML = `<div class="empty"><b>No matches</b>${q ? `Nothing found for “${esc(Q)}”.` : 'No clients of this type.'}</div>`; return; }
+  if (!shown.length) { el.innerHTML = `<div class="empty"><b>No matches</b>${q ? `Nothing found for “${esc(Q)}”.` : 'No clients with this status.'}</div>`; return; }
   const groups = new Map();
   for (const c of shown) { const L = /[A-Z]/i.test(c.name?.[0]) ? c.name[0].toUpperCase() : '#'; (groups.get(L) || groups.set(L, []).get(L)).push(c); }
   let html = '';
   for (const [L, cs] of groups) {
     html += `<div class="group-h">${esc(L)}</div><div class="group">` + cs.map(c => {
-      const sub = [c.businesses[0]?.name, c.pan || c.gstin].filter(Boolean).join(' · ') || c.mobile || '';
+      const sub = [c.businesses[0]?.name, c.pan || c.gst[0]?.gstin].filter(Boolean).join(' · ') || c.mobile || '';
       return `<button class="row lrow" data-act="open" data-id="${esc(c.id)}">${avatar(c.name)}<span class="lt"><b>${esc(c.name)}</b><small>${esc(sub || c.type || '')}</small></span>${F === 'All' && c.type && c.type !== 'Individual' ? `<span class="badge">${esc(c.type)}</span>` : ''}<span class="chev">${I.chev}</span></button>`;
     }).join('') + `</div>`;
   }
@@ -704,6 +842,12 @@ function renderDetail(id) {
   };
   const section = (title, rows, url) => rows.length
     ? `<div class="group-h"><span>${esc(title)}</span>${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">Open portal ${I.ext}</a>` : ''}</div><div class="group">${rows.join('')}</div>` : '';
+  const fieldRows = s => s.fields.filter(f => !['name', 'type', 'fileNo'].includes(f.k) && c[f.k] && shows(f, c.type)).map(f => {
+    const v = c[f.k], o = { secret: f.secret, mono: f.up || f.rule === 'aadhaar' || f.input === 'numeric' || f.input === 'tel', link: f.link };
+    if (f.k === 'aadhaar') { const d = aadhaarDigits(v); if (d.length === 12) { o.text = d.replace(/(\d{4})(?=\d)/g, '$1 '); o.mask = '•••• •••• ' + d.slice(-4); } }
+    if (f.input === 'date') o.text = fmtDate(v);
+    return row(fnv(f.label, c.type), v, o);
+  });
 
   const mob = normMobile(c.mobile || '');
   let html = bar({ left: backBtn('Clients', 'back'), right: `<button class="nav-btn" data-act="edit">Edit</button>` });
@@ -713,15 +857,8 @@ function renderDetail(id) {
     <a ${/^[6-9]\d{9}$/.test(mob) ? `href="https://wa.me/91${mob}" target="_blank" rel="noopener noreferrer"` : 'aria-disabled="true"'}>${I.chat}<span>WhatsApp</span></a>
     <a ${c.email ? `href="mailto:${esc(c.email)}"` : 'aria-disabled="true"'}>${I.mail}<span>Email</span></a>
   </nav>`;
-
-  const fieldRows = s => s.fields.filter(f => !['name', 'type', 'fileNo'].includes(f.k) && c[f.k]).map(f => {
-    const v = c[f.k], o = { secret: f.secret, mono: f.up || f.rule === 'aadhaar' || f.input === 'numeric' || f.input === 'tel', link: f.link };
-    if (f.k === 'aadhaar') { const d = v.replace(/\D/g, ''); if (d.length === 12) { o.text = d.replace(/(\d{4})(?=\d)/g, '$1 '); o.mask = '•••• •••• ' + d.slice(-4); } }
-    if (f.input === 'date') o.text = fmtDate(v);
-    return row(lab(f, c.type), v, o);
-  });
   html += section(SECTIONS[0].title, fieldRows(SECTIONS[0]));
-  c.businesses.forEach((b, i) => {
+  if (PERSONAL.has(c.type)) c.businesses.forEach((b, i) => {
     const rows = [];
     if (b.name) rows.push(row('Trade name', b.name));
     if (b.nature) rows.push(row('Nature of business', b.nature));
@@ -730,7 +867,16 @@ function renderDetail(id) {
     if (b.udyam) rows.push(row('Udyam registration', b.udyam, { mono: true }));
     html += section(c.businesses.length > 1 ? `Business ${i + 1}` : 'Business', rows);
   });
-  for (const s of SECTIONS.slice(1)) html += section(s.title, fieldRows(s), s.url);
+  html += section(SECTIONS[1].title, fieldRows(SECTIONS[1]));
+  html += section(SECTIONS[2].title, fieldRows(SECTIONS[2]), SECTIONS[2].url);
+  c.gst.forEach(g => {
+    const rows = [];
+    if (g.gstin) rows.push(row('GSTIN', g.gstin, { mono: true }));
+    if (g.user) rows.push(row('Username', g.user));
+    if (g.pass) rows.push(row('Password', g.pass, { secret: true }));
+    html += section(`GST · ${GST_STATES[g.gstin?.slice(0, 2)] || 'Registration'}`, rows, GST_URL);
+  });
+  for (const s of SECTIONS.slice(3)) html += section(s.title, fieldRows(s), s.url);
   html += section('Other details', [
     ...S.meta.customFields.filter(f => c.custom[f.id]).map(f => row(f.label, c.custom[f.id], { secret: f.secret })),
     ...c.extra.filter(x => x.value).map(x => row(x.label || 'Other', x.value, { secret: x.secret })),
@@ -757,10 +903,12 @@ function renderDetail(id) {
 
 // ---------- edit ----------
 const msgDiv = '<div class="fmsg" hidden></div>';
+const inputAttrs = 'autocomplete="off" autocorrect="off" spellcheck="false"';
+const eyeBtn = label => `<button type="button" class="ibtn" data-act="mask" aria-label="Show or hide ${esc(label)}">${I.eye}</button>`;
 const xrow = (x = {}) => `<div class="xrow" data-secret="${x.secret ? 1 : 0}">
   <button type="button" class="rm" data-act="xdel" aria-label="Remove field"></button>
   <input class="finput xl" placeholder="Label" value="${esc(x.label)}" autocomplete="off" aria-label="Field label">
-  <input class="finput xv${x.secret ? ' masked' : ''}" placeholder="Value" value="${esc(x.value)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Field value">
+  <input class="finput xv${x.secret ? ' masked' : ''}" placeholder="Value" value="${esc(x.value)}" ${inputAttrs} autocapitalize="off" aria-label="Field value">
   <button type="button" class="ibtn" data-act="xsec" aria-label="Mark as secret">${x.secret ? I.lockSm : I.unlockSm}</button></div>`;
 
 const bizBlock = (b, type) => `<div data-biz>
@@ -769,25 +917,34 @@ const bizBlock = (b, type) => `<div data-biz>
     <div class="frow"><span class="flabel">Trade name</span><input class="finput" data-bf="name" value="${esc(b.name)}" placeholder="e.g. Patel Traders" autocomplete="off" aria-label="Trade name"></div>
     <div class="frow"><span class="flabel">Nature</span><input class="finput" data-bf="nature" value="${esc(b.nature)}" placeholder="e.g. Retail – textiles" autocomplete="off" aria-label="Nature of business"></div>
     <div class="row"><span class="grow" data-same-label>Same as ${esc(addrLabel(type).toLowerCase())}</span>${sw(b.same, 'bsame', ' aria-label="Business address is the same"')}</div>
-    <div class="frow" data-baddr${b.same ? ' hidden' : ''}><span class="flabel">Address</span><textarea class="finput" data-bf="address" placeholder="Business address with PIN code" aria-label="Business address">${esc(b.address)}</textarea></div>
-    <div class="frow"><span class="flabel">Udyam no.</span><input class="finput up" data-bf="udyam" data-rule="udyam" data-norm="up" value="${esc(b.udyam)}" placeholder="UDYAM-GJ-01-1234567" autocapitalize="characters" autocomplete="off" aria-label="Udyam registration number">${msgDiv}</div>
+    <div class="frow" data-baddr${b.same ? ' hidden' : ''}><span class="flabel">Address</span><textarea class="finput" data-bf="address" data-rule="address" placeholder="Business address with PIN code" aria-label="Business address">${esc(b.address)}</textarea>${msgDiv}</div>
+    <div class="frow"><span class="flabel">Udyam no.</span><input class="finput up" data-bf="udyam" data-rule="udyam" data-norm="id" value="${esc(b.udyam)}" placeholder="UDYAM-GJ-01-1234567" autocapitalize="characters" ${inputAttrs} aria-label="Udyam registration number">${msgDiv}</div>
+  </div></div>`;
+
+const gstBlock = g => `<div data-gst>
+  <div class="group-h"><span class="gt">GST registration</span><button type="button" class="linkbtn danger" data-act="gdel">Remove</button></div>
+  <div class="group">
+    <div class="frow"><span class="flabel">GSTIN</span><input class="finput up" data-gf="gstin" data-rule="gstin" data-norm="id" maxlength="19" value="${esc(g.gstin)}" placeholder="24ABCPE1234F1Z5" autocapitalize="characters" ${inputAttrs} aria-label="GSTIN">${msgDiv}</div>
+    <div class="frow"><span class="flabel">Username</span><input class="finput" data-gf="user" data-rule="gstUser" value="${esc(g.user)}" placeholder="GST portal username" autocapitalize="off" ${inputAttrs} aria-label="GST username">${msgDiv}</div>
+    <div class="frow"><span class="flabel">Password</span><input class="finput masked" data-gf="pass" value="${esc(g.pass)}" autocapitalize="off" ${inputAttrs} aria-label="GST password">${eyeBtn('GST password')}</div>
   </div></div>`;
 
 function fieldHTML(f, v, type) {
-  const name = lab(f, type);
-  const attrs = `data-k="${f.k}" aria-label="${esc(name)}" autocomplete="off" autocorrect="off" spellcheck="false"${
+  const name = fnv(f.label, type);
+  const attrs = `data-k="${f.k}" aria-label="${esc(name)}" ${inputAttrs}${
     f.rule ? ` data-rule="${f.rule}"` : ''}${f.norm ? ` data-norm="${f.norm}"` : ''}${
-    f.up ? ' autocapitalize="characters"' : ['name', 'address', 'notes', 'bankName'].includes(f.k) ? '' : ' autocapitalize="off"'}`;
+    f.up ? ' autocapitalize="characters"' : ['name', 'address', 'notes', 'bankName', 'contact'].includes(f.k) ? '' : ' autocapitalize="off"'}`;
   let input;
-  if (f.kind === 'select') input = `<select class="finput" ${attrs}>${f.options.map(o => `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
-  else if (f.kind === 'textarea') input = `<textarea class="finput" ${attrs} placeholder="${esc(f.ph || '')}">${esc(v)}</textarea>`;
+  if (f.kind === 'select') {
+    const opts = TYPES.includes(v) || !v ? TYPES : [...TYPES, v];
+    input = `<select class="finput" ${attrs}>${opts.map(o => `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+  } else if (f.kind === 'textarea') input = `<textarea class="finput" ${attrs} placeholder="${esc(fnv(f.ph, type) || '')}">${esc(v)}</textarea>`;
   else {
-    const type_ = f.input === 'tel' ? 'tel' : f.input === 'email' ? 'email' : f.input === 'date' ? 'date' : 'text';
-    input = `<input class="finput${f.up ? ' up' : ''}${f.secret ? ' masked' : ''}" type="${type_}" ${attrs}${f.input === 'numeric' ? ' inputmode="numeric"' : ''}${f.max ? ` maxlength="${f.max + 4}"` : ''} placeholder="${esc(f.ph || '')}" value="${esc(v)}">`;
+    const t = f.input === 'tel' ? 'tel' : f.input === 'email' ? 'email' : f.input === 'date' ? 'date' : 'text';
+    input = `<input class="finput${f.up ? ' up' : ''}${f.secret ? ' masked' : ''}" type="${t}" ${attrs}${f.input === 'numeric' ? ' inputmode="numeric"' : ''}${f.max ? ` maxlength="${f.max + 4}"` : ''}${f.input === 'date' ? ` max="${new Date().toISOString().slice(0, 10)}"` : ''} data-ph="${f.k}" placeholder="${esc(fnv(f.ph, type) || '')}" value="${esc(v)}">`;
   }
-  return `<div class="frow${f.bare ? ' bare' : ''}">${f.bare ? '' : `<span class="flabel" data-lab="${f.k}">${esc(name)}</span>`}${input}${
-    f.secret ? `<button type="button" class="ibtn" data-act="mask" aria-label="Show or hide ${esc(name)}">${I.eye}</button>` : ''}${
-    f.rule || f.k === 'name' ? msgDiv : ''}</div>`;
+  return `<div class="frow${f.bare ? ' bare' : ''}" data-row="${f.k}"${shows(f, type) ? '' : ' hidden'}>${f.bare ? '' : `<span class="flabel" data-lab="${f.k}">${esc(name)}</span>`}${input}${
+    f.secret ? eyeBtn(name) : ''}${f.rule ? msgDiv : ''}</div>`;
 }
 
 function renderEdit(id) {
@@ -797,12 +954,16 @@ function renderEdit(id) {
   let html = bar({ left: `<button class="nav-btn" data-act="cancel">Cancel</button>`, title: orig ? 'Edit Client' : 'New Client', right: `<button class="nav-btn strong" data-act="save">${orig ? 'Done' : 'Save'}</button>` });
   html += `<form id="form" autocomplete="off" novalidate>`;
   html += sec(SECTIONS[0]);
-  html += `<div id="bizs">${c.businesses.map(b => bizBlock(b, c.type)).join('')}</div>
+  html += `<div id="bizSec"${PERSONAL.has(c.type) ? '' : ' hidden'}><div id="bizs">${c.businesses.map(b => bizBlock(b, c.type)).join('')}</div>
     <div class="group"><button type="button" class="row addrow" data-act="badd"><span class="plus">+</span><span id="baddLabel"></span></button></div>
-    <p class="foot">Add a shop, firm or trade name the client runs, with its address if it’s different.</p>`;
-  for (const s of SECTIONS.slice(1, -1)) html += sec(s);
+    <p class="foot">For a proprietary business or trade name run by this ${c.type === 'HUF' ? 'HUF' : 'person'}, with its address if it’s different.</p></div>`;
+  html += sec(SECTIONS[1]) + sec(SECTIONS[2]);
+  html += `<div id="gsts">${c.gst.map(gstBlock).join('')}</div>
+    <div class="group"><button type="button" class="row addrow" data-act="gadd"><span class="plus">+</span><span id="gaddLabel"></span></button></div>
+    <p class="foot">Add one entry per GST registration (one per state).</p>`;
+  for (const s of SECTIONS.slice(3, -1)) html += sec(s);
   if (S.meta.customFields.length) html += `<div class="group-h">Custom fields</div><div class="group">${S.meta.customFields.map(f =>
-    `<div class="frow"><span class="flabel">${esc(f.label)}</span><input class="finput${f.secret ? ' masked' : ''}" data-c="${esc(f.id)}" value="${esc(c.custom[f.id] || '')}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="${esc(f.label)}">${f.secret ? `<button type="button" class="ibtn" data-act="mask" aria-label="Show or hide">${I.eye}</button>` : ''}</div>`).join('')}</div>`;
+    `<div class="frow"><span class="flabel">${esc(f.label)}</span><input class="finput${f.secret ? ' masked' : ''}" data-c="${esc(f.id)}" value="${esc(c.custom[f.id] || '')}" ${inputAttrs} autocapitalize="off" aria-label="${esc(f.label)}">${f.secret ? eyeBtn(f.label) : ''}</div>`).join('')}</div>`;
   html += `<div class="group-h">Other details</div><div class="group" id="xg">${c.extra.map(xrow).join('')}<button type="button" class="row addrow" data-act="xadd"><span class="plus">+</span>Add field</button></div>`;
   html += `<p class="foot">Use the lock icon to keep a value hidden until you tap the eye.</p>`;
   html += sec(SECTIONS[SECTIONS.length - 1]);
@@ -812,45 +973,73 @@ function renderEdit(id) {
 
   const form = $('#form');
   form.onsubmit = e => e.preventDefault();
-  let dirty = false;
+  let dirty = false, typeTouched = !!orig;
   const typeSel = $('[data-k="type"]', form);
-  const ctx = () => ({ type: typeSel.value, pan: NORM.id($('[data-k="pan"]', form).value) });
-  const check = (el, normalise) => {
-    if (normalise && el.dataset.norm && el.value.trim()) el.value = NORM[el.dataset.norm](el.value);
-    const v = el.value.trim(), rule = RULES[el.dataset.rule];
-    const res = v && rule ? rule(el.dataset.norm ? NORM[el.dataset.norm](v) : v, ctx()) : null;
-    showMsg(el, res);
-    return res;
-  };
+  const val = k => $(`[data-k="${k}"]`, form).value.trim();
+  const ctx = () => ({
+    type: typeSel.value, name: val('name'), pan: NORM.id(val('pan')), dob: val('dob'), self: c.id,
+    biz: PERSONAL.has(typeSel.value) ? $$('[data-bf="name"]', form).map(i => i.value.trim()).filter(Boolean) : [],
+    gstins: $$('[data-gf="gstin"]', form).map(i => NORM.id(i.value)).filter(Boolean),
+  });
   const showMsg = (el, res) => {
     const row = el.closest('.frow'), m = $('.fmsg', row);
+    if (!m) return;
     m.hidden = !res; m.textContent = res?.msg || ''; m.className = 'fmsg ' + (res?.level || '');
     row.classList.toggle('bad', res?.level === 'err');
     el.setAttribute('aria-invalid', res?.level === 'err' ? 'true' : 'false');
   };
+  const check = (el, x) => {
+    const v = el.value.trim(), rule = RULES[el.dataset.rule];
+    const res = v && rule ? rule(el.dataset.norm ? NORM[el.dataset.norm](v) : v, x) : null;
+    showMsg(el, res);
+    return res;
+  };
+  const visible = el => !el.closest('[hidden]');
+  const normalise = el => { if (el.dataset.norm && el.value.trim()) el.value = NORM[el.dataset.norm](el.value); };
+  // Re-checks every filled, visible field, because many rules depend on each other (status ↔ PAN ↔ GSTIN ↔ name).
+  const validateAll = () => {
+    const x = ctx();
+    return $$('[data-rule]', form).map(el => {
+      if (!visible(el)) { showMsg(el, null); return null; }
+      const r = check(el, x);
+      return r && [el, r];
+    }).filter(Boolean);
+  };
   const relabel = () => {
     const t = typeSel.value;
-    $('[data-lab="dob"]', form).textContent = dobLabel(t);
-    $('[data-lab="address"]', form).textContent = addrLabel(t);
+    for (const f of FIELDS) {
+      const row = $(`[data-row="${f.k}"]`, form);
+      row.hidden = !shows(f, t);
+      const l = $(`[data-lab="${f.k}"]`, form); if (l) l.textContent = fnv(f.label, t);
+      const p = $(`[data-ph="${f.k}"]`, form); if (p) p.placeholder = fnv(f.ph, t) || '';
+    }
+    $('#bizSec').hidden = !PERSONAL.has(t);
     $$('[data-same-label]', form).forEach(s => { s.textContent = `Same as ${addrLabel(t).toLowerCase()}`; });
-    const n = $$('[data-biz]', form).length;
-    $$('[data-biz]', form).forEach((b, i) => { $('.bt', b).textContent = n > 1 ? `Business ${i + 1}` : 'Business'; });
-    $('#baddLabel').textContent = n ? 'Add another business' : PERSONAL.has(t) ? 'Add business details' : 'Add trade name or branch';
+    const nb = $$('[data-biz]', form).length, ng = $$('[data-gst]', form).length;
+    $$('[data-biz]', form).forEach((b, i) => { $('.bt', b).textContent = nb > 1 ? `Business ${i + 1}` : 'Business'; });
+    $$('[data-gst]', form).forEach((g, i) => { $('.gt', g).textContent = ng > 1 ? `GST registration ${i + 1}` : 'GST registration'; });
+    $('#baddLabel').textContent = nb ? 'Add another business' : 'Add business / trade name';
+    $('#gaddLabel').textContent = ng ? 'Add another GST registration' : 'Add GST registration';
   };
   relabel();
+  if (orig) validateAll();
   form.addEventListener('input', e => {
     dirty = true;
-    const el = e.target;
-    if (el.dataset.rule && !$('.fmsg', el.closest('.frow')).hidden) check(el, false);
+    const el = e.target, m = el.dataset.rule && $('.fmsg', el.closest('.frow'));
+    if (m && !m.hidden && !m.classList.contains('ok')) check(el, ctx());
   });
   form.addEventListener('focusout', e => {
     const el = e.target;
-    if (el.dataset?.rule || el.dataset?.norm) check(el, true);
-    if (el.dataset?.k === 'pan') { const g = $('[data-k="gstin"]', form); if (g.value.trim()) check(g, false); }
+    if (!el.dataset) return;
+    normalise(el);
+    // On a new client, set the status from the PAN's 4th letter until the user picks one.
+    if (el.dataset.k === 'pan' && !typeTouched && PAN_RE.test(el.value) && PAN_TO_TYPE[el.value[3]] && typeSel.value !== PAN_TO_TYPE[el.value[3]]) {
+      typeSel.value = PAN_TO_TYPE[el.value[3]]; relabel();
+      toast(el.value[3] === 'F' ? 'Status set to Partnership Firm from the PAN — change to LLP if needed' : `Status set to ${typeSel.value} from the PAN`);
+    }
+    validateAll();
   });
-  typeSel.addEventListener('change', () => { relabel(); const p = $('[data-k="pan"]', form); if (p.value.trim()) check(p, false); });
-  $$('[data-rule]', form).forEach(el => el.value.trim() && check(el, false));
-  if (!orig) setTimeout(() => $('[data-k="name"]').focus(), 50);
+  typeSel.addEventListener('change', () => { typeTouched = true; relabel(); validateAll(); });
 
   ACT.cancel = () => { if (!dirty || confirm('Discard your changes?')) orig ? go('detail', id) : go('list'); };
   ACT.mask = t => { const el = t.parentElement.querySelector('.finput'); const m = el.classList.toggle('masked'); t.innerHTML = m ? I.eye : I.eyeOff; };
@@ -864,39 +1053,51 @@ function renderEdit(id) {
     b.remove(); dirty = true; relabel();
   };
   ACT.bsame = t => { const on = t.getAttribute('aria-checked') !== 'true'; t.setAttribute('aria-checked', on); t.closest('[data-biz]').querySelector('[data-baddr]').hidden = on; dirty = true; };
+  ACT.gadd = () => { $('#gsts').insertAdjacentHTML('beforeend', gstBlock({})); dirty = true; relabel(); $('#gsts [data-gst]:last-child [data-gf="gstin"]').focus(); };
+  ACT.gdel = t => {
+    const g = t.closest('[data-gst]');
+    if ($$('[data-gf]', g).some(i => i.value.trim()) && !confirm('Remove this GST registration?')) return;
+    g.remove(); dirty = true; relabel(); validateAll();
+  };
   ACT.del = async () => {
     if (!canWrite() || !confirm(`Delete ${orig.name}? This can’t be undone.`)) return;
     try { await deleteClient(id); toast('Client deleted'); go('list'); } catch (e) { toast(errText(e)); }
   };
   ACT.save = async t => {
     if (!canWrite()) return;
-    // Normalise and validate everything first.
-    const results = $$('[data-rule]', form).map(el => [el, check(el, true)]).filter(([, r]) => r);
+    $$('[data-norm]', form).forEach(normalise);
+    const results = validateAll();
     const nameEl = $('[data-k="name"]', form);
-    if (!nameEl.value.trim()) { showMsg(nameEl, err('Name is required')); results.unshift([nameEl, err('Name is required')]); }
-    else showMsg(nameEl, null);
+    if (!nameEl.value.trim()) { const r = err('Name is required'); showMsg(nameEl, r); results.unshift([nameEl, r]); }
     const errors = results.filter(([, r]) => r.level === 'err');
     if (errors.length) {
       toast(errors.length === 1 ? 'Please fix the highlighted field' : `Please fix ${errors.length} highlighted fields`);
       errors[0][0].scrollIntoView({ block: 'center', behavior: 'smooth' });
       return errors[0][0].focus({ preventScroll: true });
     }
-    const d = { ...c, custom: {}, extra: [] };
-    $$('[data-k]', form).forEach(el => { const v = el.value.trim(); if (v) d[el.dataset.k] = v; else delete d[el.dataset.k]; });
+    const type = typeSel.value;
+    const d = { ...c, type, custom: {}, extra: [] };
+    for (const f of FIELDS) {
+      const v = val(f.k);
+      if (v && shows(f, type)) d[f.k] = v; else delete d[f.k];
+    }
     $$('[data-c]', form).forEach(el => { const v = el.value.trim(); if (v) d.custom[el.dataset.c] = v; });
     d.extra = $$('.xrow', form).map(r => ({ label: $('.xl', r).value.trim(), value: $('.xv', r).value.trim(), secret: r.dataset.secret === '1' })).filter(x => x.label || x.value);
-    d.businesses = $$('[data-biz]', form).map(b => {
+    const biz = $$('[data-biz]', form).map(b => {
       const g = k => $(`[data-bf="${k}"]`, b).value.trim();
       const same = $('.switch', b).getAttribute('aria-checked') === 'true';
       return { name: g('name'), nature: g('nature'), same, address: same ? '' : g('address'), udyam: g('udyam') };
     }).filter(b => b.name || b.nature || b.address || b.udyam);
-    if (!d.pan && d.gstin && !RULES.gstin(d.gstin, {})) d.pan = d.gstin.slice(2, 12);
+    if (!PERSONAL.has(type) && biz.length && !confirm(`A ${type} is itself the business, so the business / trade name entries will be removed. Continue?`)) return;
+    d.businesses = PERSONAL.has(type) ? biz : [];
+    d.gst = $$('[data-gst]', form).map(g => {
+      const v = k => $(`[data-gf="${k}"]`, g).value.trim();
+      return { gstin: v('gstin'), user: v('user'), pass: v('pass') };
+    }).filter(g => g.gstin || g.user || g.pass);
+    const firstGstin = d.gst.find(g => GSTIN_RE.test(g.gstin))?.gstin;
+    if (!d.pan && firstGstin) d.pan = firstGstin.slice(2, 12);
     if (d.itPass && !d.itUser && d.pan) d.itUser = d.pan;
     const warnings = results.filter(([, r]) => r.level === 'warn').map(([, r]) => '• ' + r.msg);
-    for (const k of ['pan', 'gstin']) {
-      const dup = d[k] && S.clients.find(x => x.id !== c.id && x[k] === d[k]);
-      if (dup) warnings.push(`• ${dup.name} already has this ${k.toUpperCase()}`);
-    }
     if (warnings.length && !confirm(`Please check:\n${warnings.join('\n')}\n\nSave anyway?`)) return;
     const now = Date.now();
     if (!d.id) { d.id = uid(); d.created = now; }
@@ -1072,7 +1273,9 @@ if (!window.isSecureContext || !crypto.subtle) {
 } else {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   navigator.storage?.persist?.();
-  bioAvailable().then(ok => { BIO_OK = ok; if (S && cur.v === 'list') renderList(); });
-  openVault();
+  bioAvailable().then(ok_ => { BIO_OK = ok_; if (S && cur.v === 'list') renderList(); });
+  const qs = new URLSearchParams(location.search);
+  if (qs.get('mode') === 'resetPassword' && qs.get('oobCode')) renderReset(qs.get('oobCode'));
+  else openVault();
 }
 })();

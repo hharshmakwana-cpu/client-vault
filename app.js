@@ -5,6 +5,10 @@
 // Key design: a random 256-bit data key (DEK) encrypts every record. The DEK itself is
 // encrypted ("wrapped") with a key derived from the master password (PBKDF2-SHA256).
 // Changing the master password only re-wraps the DEK.
+//
+// Face ID / biometric unlock uses a passkey with the WebAuthn PRF extension: the passkey
+// produces a secret only after Face ID succeeds, and that secret wraps a second copy of the
+// DEK kept on this device. The master password is never stored.
 (() => {
 const CFG = window.CLIENT_VAULT_CONFIG || {};
 const DEMO = !CFG.apiKey || CFG.apiKey === 'demo';
@@ -13,6 +17,9 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const app = $('#app');
+const UA = navigator.userAgent;
+const IOS = /iPhone|iPad|iPod/.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
+const BIO = IOS ? 'Face ID' : /Macintosh/.test(UA) ? 'Touch ID' : /Windows/.test(UA) ? 'Windows Hello' : 'fingerprint';
 
 // ---------- small utils ----------
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -24,8 +31,9 @@ function readLS(k) { try { return JSON.parse(localStorage.getItem(k)); } catch {
 function writeLS(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 const fmtDate = t => t ? new Date(t).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
 const fmtTime = t => new Date(t).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 let toastTimer;
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2200); }
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600); }
 
 // ---------- local key-value store (IndexedDB) ----------
 const store = (() => {
@@ -72,11 +80,13 @@ class AuthError extends Error {}
 const AUTH_MSG = {
   EMAIL_NOT_FOUND: 'Wrong email or password.', INVALID_PASSWORD: 'Wrong email or password.',
   INVALID_LOGIN_CREDENTIALS: 'Wrong email or password.', INVALID_EMAIL: 'That email address looks wrong.',
-  USER_DISABLED: 'This account is disabled.', TOO_MANY_ATTEMPTS_TRY_LATER: 'Too many attempts. Try again later.',
+  MISSING_PASSWORD: 'Enter your password.', USER_DISABLED: 'This account is disabled.',
+  TOO_MANY_ATTEMPTS_TRY_LATER: 'Too many attempts. Try again in a few minutes.',
 };
 
 function firebaseBackend() {
   const FS = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(CFG.projectId)}/databases/(default)/documents`;
+  const ID = 'https://identitytoolkit.googleapis.com/v1/accounts';
   let auth = readLS('cv-auth');
   const saveAuth = a => { auth = a; writeLS('cv-auth', a && { uid: a.uid, email: a.email, refreshToken: a.refreshToken }); };
 
@@ -85,17 +95,17 @@ function firebaseBackend() {
       headers: { 'Content-Type': form ? 'application/x-www-form-urlencoded' : 'application/json' },
       body: form ? new URLSearchParams(body) : JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { const code = String(j.error?.message || r.status).split(' ')[0]; throw Object.assign(new Error(AUTH_MSG[code] || code), { code }); }
+    if (!r.ok) { const code = String(j.error?.message || r.status).split(' ')[0]; throw Object.assign(new Error(AUTH_MSG[code] || 'Something went wrong. Please try again.'), { code }); }
     return j;
   }
   async function token() {
-    if (!auth) throw new AuthError('Signed out');
+    if (!auth) throw new AuthError('Please sign in.');
     if (auth.idToken && Date.now() < auth.exp - 60000) return auth.idToken;
     try {
       const j = await post(`https://securetoken.googleapis.com/v1/token?key=${CFG.apiKey}`, { grant_type: 'refresh_token', refresh_token: auth.refreshToken }, true);
       saveAuth({ ...auth, idToken: j.id_token, refreshToken: j.refresh_token, exp: Date.now() + j.expires_in * 1000 });
       return auth.idToken;
-    } catch (e) { if (e.code) throw new AuthError('Please sign in again.'); throw e; }
+    } catch (e) { if (e.code) throw new AuthError('Your session expired. Please sign in again.'); throw e; }
   }
   async function fs(method, path, body) {
     const r = await fetch(FS + path, { method,
@@ -103,9 +113,9 @@ function firebaseBackend() {
       body: body ? JSON.stringify(body) : undefined });
     if (r.status === 404 && method === 'GET') return null;
     const j = await r.json().catch(() => ({}));
-    if (r.status === 401) throw new AuthError('Please sign in again.');
-    if (r.status === 403) throw new Error('Access denied. Check the Firestore security rules in the setup guide.');
-    if (!r.ok) throw new Error(j.error?.message || 'Server error ' + r.status);
+    if (r.status === 401) throw new AuthError('Your session expired. Please sign in again.');
+    if (r.status === 403) throw new Error('This account doesn’t have access to the vault.');
+    if (!r.ok) throw new Error('Couldn’t reach the vault. Please try again.');
     return j;
   }
   const toFields = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'number' ? { integerValue: String(v) } : { stringValue: String(v) }]));
@@ -117,9 +127,10 @@ function firebaseBackend() {
     demo: false,
     get user() { return auth; },
     async signIn(email, password) {
-      const j = await post(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${CFG.apiKey}`, { email, password, returnSecureToken: true });
+      const j = await post(`${ID}:signInWithPassword?key=${CFG.apiKey}`, { email, password, returnSecureToken: true });
       saveAuth({ uid: j.localId, email: j.email, refreshToken: j.refreshToken, idToken: j.idToken, exp: Date.now() + j.expiresIn * 1000 });
     },
+    async resetPassword(email) { await post(`${ID}:sendOobCode?key=${CFG.apiKey}`, { requestType: 'PASSWORD_RESET', email }); },
     signOut() { saveAuth(null); },
     async getVault() { const d = await fs('GET', base()); return d && fromDoc(d); },
     async putVault(f) { await fs('PATCH', `${base()}?${mask(Object.keys(f))}`, { fields: toFields(f) }); },
@@ -136,12 +147,12 @@ function firebaseBackend() {
   };
 }
 
-// Demo mode: same interface, stored in this browser only. Used until Firebase is configured.
+// Demo mode: same interface, stored in this browser only. Used when config.js is empty.
 function demoBackend() {
   return {
     demo: true,
     user: { uid: 'demo', email: 'Demo mode' },
-    async signIn() {}, signOut() {},
+    async signIn() {}, async resetPassword() {}, signOut() {},
     async getVault() { return (await store.get('demo:vault')) || null; },
     async putVault(f) { await store.set('demo:vault', { ...((await store.get('demo:vault')) || {}), ...f }); },
     async listClients() { return Object.values((await store.get('demo:clients')) || {}); },
@@ -154,49 +165,105 @@ const cacheKey = () => 'cache:' + DB.user.uid;
 
 // ---------- client fields ----------
 const TYPES = ['Individual', 'HUF', 'Proprietorship', 'Partnership Firm', 'LLP', 'Company', 'Trust', 'AOP / BOI', 'Other'];
+const PERSONAL = new Set(['Individual', 'HUF', 'Proprietorship']);
+const addrLabel = t => PERSONAL.has(t) ? 'Home address' : 'Registered office';
+const dobLabel = t => t === 'Individual' || t === 'Proprietorship' ? 'Date of birth' : t === 'HUF' ? 'Date of formation' : 'Date of incorporation';
 const SECTIONS = [
   { title: 'Basic details', fields: [
-    { k: 'name', label: 'Name', ph: 'Full or business name' },
+    { k: 'name', label: 'Name', ph: 'Required — as per PAN' },
     { k: 'type', label: 'Type', kind: 'select', options: TYPES },
     { k: 'fileNo', label: 'File no.', ph: 'Optional' },
-    { k: 'mobile', label: 'Mobile', input: 'tel', link: 'tel:' },
-    { k: 'email', label: 'Email', input: 'email', link: 'mailto:' },
-    { k: 'dob', label: 'DOB / DOI', input: 'date' },
-    { k: 'address', label: 'Address', kind: 'textarea' },
+    { k: 'mobile', label: 'Mobile', input: 'tel', rule: 'mobile', norm: 'mobile', ph: '10-digit number', link: 'tel:' },
+    { k: 'email', label: 'Email', input: 'email', rule: 'email', norm: 'lower', link: 'mailto:' },
+    { k: 'dob', label: dobLabel, input: 'date', rule: 'dob' },
+    { k: 'address', label: addrLabel, kind: 'textarea', ph: 'Address with PIN code' },
   ] },
   { title: 'Identity', fields: [
-    { k: 'pan', label: 'PAN', up: true, max: 10, check: 'pan', ph: 'ABCDE1234F' },
-    { k: 'aadhaar', label: 'Aadhaar', input: 'numeric', max: 14, check: 'aadhaar', secret: true, ph: '12 digits' },
-    { k: 'tan', label: 'TAN', up: true, max: 10, check: 'tan' },
+    { k: 'pan', label: 'PAN', up: true, max: 10, rule: 'pan', norm: 'id', ph: 'ABCPE1234F' },
+    { k: 'aadhaar', label: 'Aadhaar', input: 'numeric', max: 14, rule: 'aadhaar', norm: 'aadhaar', secret: true, ph: '12 digits' },
+    { k: 'tan', label: 'TAN', up: true, max: 10, rule: 'tan', norm: 'id', ph: 'If they deduct TDS' },
   ] },
   { title: 'Income Tax portal', url: 'https://eportal.incometax.gov.in/iec/foservices/#/login', fields: [
-    { k: 'itUser', label: 'User ID', up: true, ph: 'Usually the PAN' },
+    { k: 'itUser', label: 'User ID', up: true, norm: 'id', ph: 'Usually the PAN' },
     { k: 'itPass', label: 'Password', secret: true },
   ] },
   { title: 'GST portal', url: 'https://services.gst.gov.in/services/login', fields: [
-    { k: 'gstin', label: 'GSTIN', up: true, max: 15, check: 'gstin', ph: '24ABCDE1234F1Z5' },
+    { k: 'gstin', label: 'GSTIN', up: true, max: 15, rule: 'gstin', norm: 'id', ph: '24ABCPE1234F1Z5' },
     { k: 'gstUser', label: 'Username' },
     { k: 'gstPass', label: 'Password', secret: true },
   ] },
   { title: 'TRACES', url: 'https://www.tdscpc.gov.in/app/login.xhtml', fields: [
-    { k: 'tracesUser', label: 'User ID' },
+    { k: 'tracesUser', label: 'User ID', up: true, norm: 'up' },
     { k: 'tracesPass', label: 'Password', secret: true },
   ] },
   { title: 'Bank', fields: [
     { k: 'bankName', label: 'Bank' },
-    { k: 'bankAcc', label: 'Account no.', input: 'numeric' },
-    { k: 'ifsc', label: 'IFSC', up: true, max: 11 },
+    { k: 'bankAcc', label: 'Account no.', input: 'numeric', rule: 'bankAcc', norm: 'digits' },
+    { k: 'ifsc', label: 'IFSC', up: true, max: 11, rule: 'ifsc', norm: 'id', ph: 'SBIN0001234' },
   ] },
   { title: 'Notes', fields: [{ k: 'notes', label: 'Notes', kind: 'textarea', bare: true, ph: 'Anything else about this client' }] },
 ];
-const UPPER = new Set(SECTIONS.flatMap(s => s.fields).filter(f => f.up).map(f => f.k));
-const CHECKS = {
-  pan: v => /^[A-Z]{5}\d{4}[A-Z]$/.test(v),
-  tan: v => /^[A-Z]{4}\d{5}[A-Z]$/.test(v),
-  gstin: v => /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(v),
-  aadhaar: v => /^\d{12}$/.test(v.replace(/\s/g, '')),
+const lab = (f, type) => typeof f.label === 'function' ? f.label(type) : f.label;
+
+// ---------- validation ----------
+// Each rule gets the normalised value and the client context; returns null or {level, msg}.
+const err = msg => ({ level: 'err', msg }), warn = msg => ({ level: 'warn', msg });
+const PAN_TYPE = { Individual: 'P', HUF: 'H', Proprietorship: 'P', 'Partnership Firm': 'F', LLP: 'F', Company: 'C', Trust: 'T', 'AOP / BOI': 'AB' };
+const PAN_HOLDER = { P: 'an individual', H: 'a HUF', F: 'a firm or LLP', C: 'a company', T: 'a trust', A: 'an AOP', B: 'a BOI', G: 'a government body', J: 'an artificial juridical person', L: 'a local authority' };
+const VD = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,4,0,1,2,8,9,5,6,7],[4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],[8,7,6,5,9,3,2,1,0,4],[9,8,7,6,5,4,3,2,1,0]];
+const VP = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],[8,9,1,6,0,4,3,5,2,7],[9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]];
+const verhoeff = n => [...n].reverse().reduce((c, d, i) => VD[c][VP[i % 8][+d]], 0) === 0;
+function gstinCheckDigit(g) {
+  const cs = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  let sum = 0;
+  for (let i = 0; i < 14; i++) { const p = cs.indexOf(g[i]) * (i % 2 ? 2 : 1); sum += Math.floor(p / 36) + (p % 36); }
+  return cs[(36 - (sum % 36)) % 36];
+}
+function normMobile(v) {
+  let d = v.replace(/\D/g, '');
+  if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+  else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  return d;
+}
+const PAN_RE = /^[A-Z]{5}\d{4}[A-Z]$/;
+const RULES = {
+  mobile: v => /^[6-9]\d{9}$/.test(normMobile(v)) ? null : err('Enter a 10-digit Indian mobile number'),
+  email: v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v) ? null : err('This email address looks incomplete'),
+  dob: v => { const d = new Date(v); return isNaN(d) || d > new Date() || d.getFullYear() < 1900 ? err('Check this date') : null; },
+  pan: (v, c) => {
+    if (!PAN_RE.test(v)) return err('PAN has 10 characters, like ABCPE1234F');
+    if (!PAN_HOLDER[v[3]]) return err(`4th letter “${v[3]}” isn’t a valid PAN holder type`);
+    const exp = PAN_TYPE[c.type];
+    if (exp && !exp.includes(v[3])) return warn(`This PAN belongs to ${PAN_HOLDER[v[3]]}, but the type is ${c.type}`);
+    return null;
+  },
+  aadhaar: v => {
+    const d = v.replace(/\s/g, '');
+    if (!/^\d{12}$/.test(d)) return err('Aadhaar has 12 digits');
+    if (!/^[2-9]/.test(d) || !verhoeff(d)) return err('This isn’t a valid Aadhaar number — check for a typo');
+    return null;
+  },
+  tan: v => /^[A-Z]{4}\d{5}[A-Z]$/.test(v) ? null : err('TAN has 10 characters, like ABCD12345E'),
+  gstin: (v, c) => {
+    if (!/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(v)) return err('GSTIN has 15 characters, like 24ABCPE1234F1Z5');
+    const st = +v.slice(0, 2);
+    if (!((st >= 1 && st <= 38) || st === 97 || st === 99)) return err('The first 2 digits aren’t a valid state code');
+    if (gstinCheckDigit(v) !== v[14]) return err('The last character doesn’t match — check for a typo');
+    if (PAN_RE.test(c.pan || '') && v.slice(2, 12) !== c.pan) return warn('This GSTIN doesn’t contain the client’s PAN');
+    return null;
+  },
+  ifsc: v => /^[A-Z]{4}0[A-Z0-9]{6}$/.test(v) ? null : err('IFSC has 11 characters, like SBIN0001234'),
+  bankAcc: v => /^\d{9,18}$/.test(v) ? null : err('Account number should be 9 to 18 digits'),
+  udyam: v => /^UDYAM-[A-Z]{2}-\d{2}-\d{7}$/.test(v) ? null : err('Format: UDYAM-GJ-01-1234567'),
 };
-const CHECK_MSG = { pan: 'PAN should look like ABCDE1234F', tan: 'TAN should look like ABCD12345E', gstin: 'GSTIN should be 15 characters, e.g. 24ABCDE1234F1Z5', aadhaar: 'Aadhaar should be 12 digits' };
+const NORM = {
+  id: v => v.replace(/\s+/g, '').toUpperCase(),
+  up: v => v.trim().toUpperCase(),
+  lower: v => v.trim().toLowerCase(),
+  digits: v => v.replace(/\D/g, ''),
+  mobile: v => { const d = normMobile(v); return /^[6-9]\d{9}$/.test(d) ? d : v.trim(); },
+  aadhaar: v => { const d = v.replace(/\D/g, ''); return d.length === 12 ? d.replace(/(\d{4})(?=\d)/g, '$1 ') : v.trim(); },
+};
 
 // ---------- icons ----------
 const I = {
@@ -211,12 +278,16 @@ const I = {
   unlockSm: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2.2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 6.8-1.2"/></svg>',
   ext: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
   chev: '<svg viewBox="0 0 8 14" width="8" height="14" aria-hidden="true"><path d="m1 1 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  face: '<svg viewBox="0 0 48 48" width="52" height="52" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15v-5a4 4 0 0 1 4-4h5M33 6h5a4 4 0 0 1 4 4v5M42 33v5a4 4 0 0 1-4 4h-5M15 42h-5a4 4 0 0 1-4-4v-5"/><path d="M17 18v3M31 18v3M24 18v8h-2M18 31c3.5 3 8.5 3 12 0"/></svg>',
+  phone: '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.9 2 11.7c0 2.4 1.1 4.6 3 6.2L4.2 21l3.9-1.9c1.2.4 2.5.6 3.9.6 5.5 0 10-3.9 10-8.7S17.5 3 12 3z"/></svg>',
+  mail: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m4 7 8 6 8-6"/></svg>',
 };
 
 // ---------- session state ----------
 // S = { key, raw, vault, meta:{customFields}, clients:[], recs:Map, offline, syncedAt }
-let S = null, PV = null, Q = '', cur = { v: 'list' }, ACT = {};
-const settings = Object.assign({ lockAfter: 60, lastBackup: 0 }, readLS('cv-settings'));
+let S = null, PV = null, Q = '', F = 'All', cur = { v: 'list' }, ACT = {};
+const settings = Object.assign({ lockAfter: 60, lastBackup: 0, bioOffer: true }, readLS('cv-settings'));
 const saveSettings = () => writeLS('cv-settings', settings);
 
 app.addEventListener('click', e => {
@@ -227,6 +298,7 @@ app.addEventListener('click', e => {
 const bar = ({ left = '', title = '', right = '' }) =>
   `<header class="bar"><div class="bar-row"><div>${left}</div><div class="bar-t">${esc(title)}</div><div class="bar-r">${right}</div></div></header>`;
 const backBtn = (label, act) => `<button class="nav-btn back" data-act="${act}">${I.back}<span>${esc(label)}</span></button>`;
+const sw = (on, act, extra = '') => `<button type="button" class="switch" role="switch" aria-checked="${!!on}" data-act="${act}"${extra}></button>`;
 const initials = n => (n || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
 const hue = n => { let h = 0; for (const ch of n || '') h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
 const avatar = (n, big) => `<div class="avatar${big ? ' big' : ''}" style="--h:${hue(n)}" aria-hidden="true">${esc(initials(n))}</div>`;
@@ -242,6 +314,7 @@ async function applyMeta() {
   S.meta = S.vault.metaCt ? await decJSON(S.key, { iv: S.vault.metaIv, ct: S.vault.metaCt }) : {};
   S.meta.customFields = Array.isArray(S.meta.customFields) ? S.meta.customFields : [];
 }
+function tidy(c) { c.custom ||= {}; c.extra ||= []; c.businesses ||= []; return c; }
 async function applyRecs(recs) {
   const prev = new Map(S.clients.map(c => [c.id, c]));
   const clients = [], map = new Map();
@@ -249,13 +322,13 @@ async function applyRecs(recs) {
     map.set(r.id, r);
     const old = prev.get(r.id), oldRec = S.recs.get(r.id);
     if (old && oldRec && oldRec.ct === r.ct) { clients.push(old); continue; }
-    try { const c = await decJSON(S.key, r); c.id = r.id; c.custom ||= {}; c.extra ||= []; clients.push(c); }
+    try { const c = await decJSON(S.key, r); c.id = r.id; clients.push(tidy(c)); }
     catch { console.warn('Could not decrypt record', r.id); }
   }
   S.clients = clients; S.recs = map;
 }
 const writeCache = () => store.set(cacheKey(), { vault: S.vault, clients: [...S.recs.values()] }).catch(() => {});
-function canWrite() { if (S.offline) { toast("You're offline — changes can't be saved right now."); return false; } return true; }
+function canWrite() { if (S.offline) { toast('You’re offline — changes can’t be saved right now.'); return false; } return true; }
 
 async function saveClient(c) {
   const e = await encJSON(S.key, c);
@@ -294,6 +367,76 @@ async function sync() {
   } finally { syncing = false; }
 }
 
+// ---------- biometric unlock (passkey + PRF) ----------
+let BIO_OK = false, bioPending = null;
+const bioKey = () => 'cv-bio:' + DB.user.uid;
+const bioRecord = () => DB.user ? readLS(bioKey()) : null;
+async function bioAvailable() {
+  try {
+    if (!window.PublicKeyCredential || !(await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())) return false;
+    if (PublicKeyCredential.getClientCapabilities) {
+      const caps = await PublicKeyCredential.getClientCapabilities();
+      if (caps['extension:prf'] === false) return false;
+    }
+    return true;
+  } catch { return false; }
+}
+async function prfKey(out) {
+  const base = await crypto.subtle.importKey('raw', out, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: enc.encode('client-vault/bio'), info: enc.encode('dek-wrap') }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function prfGet(id, salt) {
+  const a = await navigator.credentials.get({ publicKey: {
+    challenge: rand(32), allowCredentials: [{ type: 'public-key', id }], userVerification: 'required', timeout: 60000,
+    extensions: { prf: { eval: { first: salt } } } } });
+  const out = a.getClientExtensionResults().prf?.results?.first;
+  if (!out) throw new Error('unsupported');
+  return out;
+}
+async function bioSave(id, salt, out) {
+  const k = await prfKey(out), iv = rand(12);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, S.raw));
+  writeLS(bioKey(), { id: toB64(new Uint8Array(id)), salt: toB64(salt), iv: toB64(iv), ct: toB64(ct) });
+}
+async function bioEnable() {
+  const salt = rand(32);
+  const cred = await navigator.credentials.create({ publicKey: {
+    rp: { name: 'Client Vault' },
+    user: { id: rand(16), name: DB.demo ? 'Client Vault' : DB.user.email, displayName: 'Client Vault' },
+    challenge: rand(32),
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'required', userVerification: 'required' },
+    timeout: 60000, extensions: { prf: { eval: { first: salt } } } } });
+  const prf = cred.getClientExtensionResults().prf;
+  if (!prf || prf.enabled === false) throw new Error('unsupported');
+  if (prf.results?.first) { await bioSave(cred.rawId, salt, prf.results.first); return true; }
+  // Some devices only return the PRF secret on sign-in, which needs one more tap.
+  bioPending = { id: cred.rawId, salt };
+  return false;
+}
+async function bioFinish() {
+  const out = await prfGet(bioPending.id, bioPending.salt);
+  await bioSave(bioPending.id, bioPending.salt, out);
+  bioPending = null;
+}
+async function bioUnlockRaw() {
+  const r = bioRecord();
+  const out = await prfGet(fromB64(r.id), fromB64(r.salt));
+  const k = await prfKey(out);
+  return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(r.iv) }, k, fromB64(r.ct)));
+}
+const bioErr = e => e.message === 'unsupported'
+  ? `This device can’t use ${BIO} for this app yet. On iPhone it needs iOS 18 or newer.`
+  : `Couldn’t turn on ${BIO}. Please try again.`;
+async function bioTurnOn(after) {
+  try {
+    if (bioPending) { await bioFinish(); toast(`${BIO} unlock is on`); }
+    else if (await bioEnable()) toast(`${BIO} unlock is on`);
+    else toast(`Tap “Finish setting up ${BIO}” to complete`);
+  } catch (e) { if (e.name !== 'NotAllowedError' && e.name !== 'AbortError') toast(bioErr(e)); }
+  after();
+}
+
 // ---------- auto-lock ----------
 let lastActive = Date.now(), hiddenAt = 0, suppressLock = false;
 ['pointerdown', 'keydown', 'input'].forEach(ev => addEventListener(ev, () => { lastActive = Date.now(); }, { passive: true, capture: true }));
@@ -314,13 +457,13 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 function lock() {
-  S = null; Q = ''; ACT = {};
+  S = null; Q = ''; ACT = {}; bioPending = null;
   document.body.classList.remove('cover');
   openVault();
 }
 async function signOut(msg) {
+  if (DB.user) { await store.del(cacheKey()).catch(() => {}); writeLS(bioKey(), null); }
   S = null; PV = null;
-  await store.del(cacheKey()).catch(() => {});
   DB.signOut();
   renderSignIn(msg);
 }
@@ -340,28 +483,35 @@ function renderError(msg, retry) {
 }
 
 function renderSignIn(msg) {
-  lockScreen('Client Vault', 'Sign in to your vault account.', `
+  lockScreen('Client Vault', 'Sign in to open your client records on this device.', `
     <form id="f" class="stack" autocomplete="on">
-      <input class="field" id="em" type="email" placeholder="Email" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" required>
-      <input class="field" id="pw" type="password" placeholder="Account password" autocomplete="current-password" required>
+      <input class="field" id="em" type="email" placeholder="Email" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(readLS('cv-email') || '')}" required>
+      <input class="field" id="pw" type="password" placeholder="Password" autocomplete="current-password" required>
       <button class="btn primary" id="go" type="submit">Sign in</button>
+      <button class="btn plainbtn" type="button" data-act="forgot">Forgot password?</button>
       <p class="err" id="err" role="alert">${esc(msg || '')}</p>
-      <p class="hint">This is your Firebase account (created in the setup guide). Your client data is unlocked separately with your master password.</p>
     </form>`);
   $('#f').onsubmit = async e => {
     e.preventDefault();
-    const btn = $('#go'); btn.disabled = true; btn.textContent = 'Signing in…';
-    try { await DB.signIn($('#em').value.trim(), $('#pw').value); openVault(); }
-    catch (err) {
+    const btn = $('#go'), email = $('#em').value.trim();
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try { await DB.signIn(email, $('#pw').value); writeLS('cv-email', email); openVault(); }
+    catch (ex) {
       btn.disabled = false; btn.textContent = 'Sign in';
-      $('#err').textContent = err instanceof TypeError ? 'No internet connection.' : err.message;
+      $('#err').textContent = ex instanceof TypeError ? 'No internet connection.' : ex.message;
     }
+  };
+  ACT.forgot = async () => {
+    const email = $('#em').value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { $('#err').textContent = 'Enter your email above first.'; return $('#em').focus(); }
+    try { await DB.resetPassword(email); $('#err').textContent = ''; toast('Password reset link sent. Check your email.'); }
+    catch (ex) { $('#err').textContent = ex instanceof TypeError ? 'No internet connection.' : ex.message; }
   };
 }
 
 async function openVault() {
   if (!DB.user) return renderSignIn();
-  renderLoading('Connecting…');
+  renderLoading('Opening your vault…');
   let vault = null, offline = false;
   try { vault = await DB.getVault(); }
   catch (e) {
@@ -376,19 +526,19 @@ async function openVault() {
 }
 
 function renderCreate() {
-  lockScreen('Create master password', 'This password encrypts every client record on your device before it is uploaded. Nobody — not Google, not us — can read your data without it.', `
+  lockScreen('Create master password', 'Your master password encrypts every client record before it leaves this device. Without it, nobody can read your data.', `
     <form id="f" class="stack" autocomplete="off">
       <input class="field" id="p1" type="password" placeholder="Master password" autocomplete="new-password">
       <input class="field" id="p2" type="password" placeholder="Confirm master password" autocomplete="new-password">
       <button class="btn primary" id="go" type="submit">Create vault</button>
       <p class="err" id="err" role="alert"></p>
-      <p class="hint">Use at least 10 characters, and make it <b>different from your account password</b>. It cannot be recovered — if you forget it, the data is lost. Write it down somewhere safe.</p>
+      <p class="hint">Use at least 10 characters, different from your sign-in password. <b>It can’t be recovered</b> — write it down and keep it safe.</p>
     </form>`);
   $('#f').onsubmit = async e => {
     e.preventDefault();
-    const a = $('#p1').value, b = $('#p2').value, err = $('#err');
-    if (a.length < 10) return (err.textContent = 'Use at least 10 characters.');
-    if (a !== b) return (err.textContent = 'Passwords don’t match.');
+    const a = $('#p1').value, b = $('#p2').value, er = $('#err');
+    if (a.length < 10) return (er.textContent = 'Use at least 10 characters.');
+    if (a !== b) return (er.textContent = 'Passwords don’t match.');
     const btn = $('#go'); btn.disabled = true; btn.textContent = 'Creating…';
     try {
       const raw = rand(32), key = await dataKey(raw);
@@ -401,25 +551,65 @@ function renderCreate() {
       go('list');
     } catch (ex) {
       btn.disabled = false; btn.textContent = 'Create vault';
-      err.textContent = ex instanceof TypeError ? 'No internet connection.' : ex.message;
+      er.textContent = ex instanceof TypeError ? 'No internet connection.' : ex.message;
     }
   };
 }
 
+async function finishUnlock(raw) {
+  renderLoading('Opening your vault…');
+  let offline = PV.offline, recs = null;
+  if (!offline) {
+    try { recs = await DB.listClients(); }
+    catch (ex) { if (ex instanceof AuthError) return signOut(ex.message); offline = true; }
+  }
+  if (offline) recs = ((await store.get(cacheKey()).catch(() => null)) || {}).clients || [];
+  S = { key: await dataKey(raw), raw, vault: PV.vault, meta: {}, clients: [], recs: new Map(), offline, syncedAt: offline ? 0 : Date.now() };
+  try { await applyMeta(); } catch { S.meta = { customFields: [] }; }
+  await applyRecs(recs);
+  if (!offline) writeCache();
+  lastActive = Date.now();
+  go('list');
+}
+
 let fails = +readLS('cv-fails') || 0, until = +readLS('cv-until') || 0;
-function renderUnlock() {
-  lockScreen('Client Vault', DEMO ? 'Demo mode — enter your master password.' : `Signed in as ${esc(DB.user.email)}`, `
+function renderUnlock(mode) {
+  const rec = bioRecord();
+  const who = DB.demo ? 'Demo mode' : esc(DB.user.email);
+  if (rec && mode !== 'pw') {
+    lockScreen('Client Vault', who, `
+      <div class="stack" style="text-align:center">
+        <button class="facebtn" data-act="bio"><span class="ring">${I.face}</span>Unlock with ${esc(BIO)}</button>
+        <button class="btn plainbtn" data-act="pw">Use master password</button>
+        <p class="err" id="err" role="alert"></p>
+      </div>`);
+    ACT.pw = () => renderUnlock('pw');
+    ACT.bio = async () => {
+      let raw;
+      try { raw = await bioUnlockRaw(); }
+      catch (e) {
+        if (e.name === 'NotAllowedError' || e.name === 'AbortError') return;
+        if (e.name === 'OperationError') writeLS(bioKey(), null);
+        return renderUnlockMsg(`${BIO} didn’t work this time. Use your master password.`);
+      }
+      finishUnlock(raw);
+    };
+    return;
+  }
+  lockScreen('Client Vault', who, `
     <form id="f" class="stack" autocomplete="off">
       <input class="field" id="pw" type="password" placeholder="Master password" autocomplete="current-password" enterkeyhint="go">
       <button class="btn primary" id="go" type="submit">Unlock</button>
+      ${rec ? `<button class="btn plainbtn" type="button" data-act="bioback">Use ${esc(BIO)} instead</button>` : ''}
       <p class="err" id="err" role="alert"></p>
     </form>`);
-  const pw = $('#pw'), btn = $('#go'), err = $('#err');
+  ACT.bioback = () => renderUnlock();
+  const pw = $('#pw'), btn = $('#go'), er = $('#err');
   const wait = () => {
     if (!document.body.contains(btn)) return;
     const s = Math.ceil((until - Date.now()) / 1000);
-    if (s > 0) { btn.disabled = true; err.textContent = `Too many wrong attempts. Try again in ${s}s.`; setTimeout(wait, 1000); }
-    else if (btn.disabled && btn.textContent === 'Unlock') { btn.disabled = false; err.textContent = ''; }
+    if (s > 0) { btn.disabled = true; er.textContent = `Too many wrong attempts. Try again in ${s}s.`; setTimeout(wait, 1000); }
+    else if (btn.disabled && btn.textContent === 'Unlock') { btn.disabled = false; er.textContent = ''; }
   };
   wait();
   $('#f').onsubmit = async e => {
@@ -431,71 +621,72 @@ function renderUnlock() {
     catch {
       fails++; if (fails >= 5) until = Date.now() + Math.min(300, 15 * 2 ** (fails - 5)) * 1000;
       writeLS('cv-fails', fails); writeLS('cv-until', until);
-      pw.value = ''; btn.textContent = 'Unlock'; btn.disabled = false; err.textContent = 'Wrong master password.';
+      pw.value = ''; btn.textContent = 'Unlock'; btn.disabled = false; er.textContent = 'Wrong master password.';
       return wait();
     }
     fails = 0; until = 0; writeLS('cv-fails', 0); writeLS('cv-until', 0);
-    btn.textContent = 'Loading clients…';
-    let offline = PV.offline, recs = null;
-    if (!offline) {
-      try { recs = await DB.listClients(); }
-      catch (ex) { if (ex instanceof AuthError) return signOut(ex.message); offline = true; }
-    }
-    if (offline) recs = ((await store.get(cacheKey()).catch(() => null)) || {}).clients || [];
-    S = { key: await dataKey(raw), raw, vault: PV.vault, meta: {}, clients: [], recs: new Map(), offline, syncedAt: offline ? 0 : Date.now() };
-    try { await applyMeta(); } catch { S.meta = { customFields: [] }; }
-    await applyRecs(recs);
-    if (!offline) writeCache();
-    lastActive = Date.now();
-    go('list');
+    finishUnlock(raw);
   };
 }
+function renderUnlockMsg(msg) { renderUnlock('pw'); $('#err').textContent = msg; }
 
 // ---------- list ----------
 function haystack(c) {
   const parts = [c.name, c.pan, c.gstin, c.mobile, c.email, c.fileNo, c.tan, c.itUser, c.gstUser, c.type];
+  for (const b of c.businesses) parts.push(b.name, b.nature, b.udyam);
   for (const f of S.meta.customFields) if (!f.secret && c.custom[f.id]) parts.push(c.custom[f.id]);
   for (const x of c.extra) if (!x.secret) parts.push(x.label, x.value);
   return parts.filter(Boolean).join(' ').toLowerCase();
 }
 function renderList() {
   let banner = '';
-  if (DB.demo) banner = `<div class="banner info">Demo mode: data is kept in this browser only. Follow the setup guide to sync securely across your devices.</div>`;
+  if (DB.demo) banner = `<div class="banner info">Demo mode — clients are kept in this browser only.</div>`;
   else if (S.offline) banner = `<button class="banner" data-act="sync">You’re offline — showing the saved copy. Changes can’t be saved. Tap to retry.</button>`;
+  if (!banner && BIO_OK && !bioRecord() && settings.bioOffer) banner = bioPending
+    ? `<div class="banner info"><span class="grow">Almost done — confirm ${esc(BIO)} once more.</span><button class="bbtn" data-act="bioOn">Confirm</button></div>`
+    : `<div class="banner info"><span class="grow">Unlock faster with ${esc(BIO)}.</span><button class="bbtn" data-act="bioOn">Turn on</button><button class="bx" data-act="bioNo" aria-label="Dismiss">×</button></div>`;
   app.innerHTML = bar({
     left: `<button class="nav-btn" data-act="settings">Settings</button>`,
     right: `<button class="nav-btn" data-act="add" aria-label="Add client">${I.plus}</button>`,
   }) + `
     <h1 class="large">Clients</h1>
-    <div class="search">${I.search}<input id="q" type="search" placeholder="Name, PAN, GSTIN, mobile…" value="${esc(Q)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Search clients"></div>
+    <div class="search">${I.search}<input id="q" type="search" placeholder="Name, PAN, GSTIN, mobile, business…" value="${esc(Q)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Search clients"></div>
+    <div class="chips" id="chips" role="tablist" aria-label="Filter by type"></div>
     ${banner}<div id="list"></div>`;
   drawList();
   $('#q').oninput = e => { Q = e.target.value; drawList(); };
   ACT.settings = () => go('settings');
   ACT.add = () => { if (canWrite()) go('edit', null); };
   ACT.open = t => go('detail', t.dataset.id);
+  ACT.filter = t => { F = t.dataset.f; drawList(); };
   ACT.sync = () => sync();
+  ACT.bioOn = () => bioTurnOn(() => renderList());
+  ACT.bioNo = () => { settings.bioOffer = false; saveSettings(); renderList(); toast(`You can turn on ${BIO} later in Settings`); };
 }
 function drawList() {
   const q = Q.trim().toLowerCase();
   const all = [...S.clients].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'en', { sensitivity: 'base' }));
-  const shown = q ? all.filter(c => haystack(c).includes(q)) : all;
+  const counts = {}; all.forEach(c => { counts[c.type || 'Other'] = (counts[c.type || 'Other'] || 0) + 1; });
+  const types = TYPES.filter(t => counts[t]);
+  if (F !== 'All' && !counts[F]) F = 'All';
+  $('#chips').hidden = types.length < 2;
+  $('#chips').innerHTML = [['All', all.length], ...types.map(t => [t, counts[t]])].map(([t, n]) =>
+    `<button class="chip${F === t ? ' on' : ''}" role="tab" aria-selected="${F === t}" data-act="filter" data-f="${esc(t)}">${esc(t)}<b>${n}</b></button>`).join('');
+  const shown = all.filter(c => (F === 'All' || (c.type || 'Other') === F) && (!q || haystack(c).includes(q)));
   const el = $('#list');
-  if (!all.length) {
-    el.innerHTML = `<div class="empty"><b>No clients yet</b>Tap + to add your first client.</div>`; return;
-  }
-  if (!shown.length) { el.innerHTML = `<div class="empty"><b>No matches</b>Nothing found for “${esc(Q)}”.</div>`; return; }
+  if (!all.length) { el.innerHTML = `<div class="empty"><b>No clients yet</b>Tap + to add your first client.</div>`; return; }
+  if (!shown.length) { el.innerHTML = `<div class="empty"><b>No matches</b>${q ? `Nothing found for “${esc(Q)}”.` : 'No clients of this type.'}</div>`; return; }
   const groups = new Map();
   for (const c of shown) { const L = /[A-Z]/i.test(c.name?.[0]) ? c.name[0].toUpperCase() : '#'; (groups.get(L) || groups.set(L, []).get(L)).push(c); }
   let html = '';
   for (const [L, cs] of groups) {
     html += `<div class="group-h">${esc(L)}</div><div class="group">` + cs.map(c => {
-      const sub = [c.pan, c.gstin].filter(Boolean).join(' · ') || c.mobile || c.type || '';
-      return `<button class="row lrow" data-act="open" data-id="${esc(c.id)}">${avatar(c.name)}<span class="lt"><b>${esc(c.name)}</b><small>${esc(sub)}</small></span><span class="chev">${I.chev}</span></button>`;
+      const sub = [c.businesses[0]?.name, c.pan || c.gstin].filter(Boolean).join(' · ') || c.mobile || '';
+      return `<button class="row lrow" data-act="open" data-id="${esc(c.id)}">${avatar(c.name)}<span class="lt"><b>${esc(c.name)}</b><small>${esc(sub || c.type || '')}</small></span>${F === 'All' && c.type && c.type !== 'Individual' ? `<span class="badge">${esc(c.type)}</span>` : ''}<span class="chev">${I.chev}</span></button>`;
     }).join('') + `</div>`;
   }
-  const synced = S.syncedAt && !DB.demo ? ` · synced ${fmtTime(S.syncedAt)}` : '';
-  html += `<p class="foot center" style="margin-top:-12px">${shown.length} of ${all.length} client${all.length === 1 ? '' : 's'}${synced}</p>`;
+  const synced = S.syncedAt && !DB.demo ? ` · updated ${fmtTime(S.syncedAt)}` : '';
+  html += `<p class="foot center" style="margin-top:-12px">${shown.length === all.length ? plural(all.length, 'client') : `${shown.length} of ${plural(all.length, 'client')}`}${synced}</p>`;
   el.innerHTML = html;
 }
 
@@ -507,26 +698,43 @@ function renderDetail(id) {
   const row = (label, value, o = {}) => {
     const i = vals.push({ label, raw: value, text: o.text ?? value, mask: o.secret ? o.mask || '••••••••' : null }) - 1;
     const shown = o.secret ? esc(vals[i].mask) : o.link ? `<a href="${esc(o.link + value)}">${esc(vals[i].text)}</a>` : esc(vals[i].text);
-    return `<div class="row"><div class="dcol"><div class="dlabel">${esc(label)}</div><div class="dval${o.mono ? ' mono' : ''}" id="v${i}">${shown}</div></div>${
+    return `<div class="row"><div class="dcol"><div class="dlabel">${esc(label)}</div><div class="dval${o.mono ? ' mono' : ''}${o.muted ? ' muted' : ''}" id="v${i}">${shown}</div></div>${
       o.secret ? `<button class="ibtn" data-act="reveal" data-i="${i}" aria-label="Show ${esc(label)}">${I.eye}</button>` : ''
-    }<button class="ibtn" data-act="copy" data-i="${i}" aria-label="Copy ${esc(label)}">${I.copy}</button></div>`;
+    }${value ? `<button class="ibtn" data-act="copy" data-i="${i}" aria-label="Copy ${esc(label)}">${I.copy}</button>` : ''}</div>`;
   };
+  const section = (title, rows, url) => rows.length
+    ? `<div class="group-h"><span>${esc(title)}</span>${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">Open portal ${I.ext}</a>` : ''}</div><div class="group">${rows.join('')}</div>` : '';
+
+  const mob = normMobile(c.mobile || '');
   let html = bar({ left: backBtn('Clients', 'back'), right: `<button class="nav-btn" data-act="edit">Edit</button>` });
   html += `<div class="hero">${avatar(c.name, true)}<h2>${esc(c.name)}</h2><p>${esc([c.type, c.fileNo && 'File ' + c.fileNo].filter(Boolean).join(' · '))}</p></div>`;
-  for (const s of SECTIONS) {
-    const rows = s.fields.filter(f => f.k !== 'name' && f.k !== 'type' && f.k !== 'fileNo' && c[f.k]).map(f => {
-      let v = c[f.k], o = { secret: f.secret, mono: f.up || f.check || f.input === 'numeric' || f.input === 'tel', link: f.link };
-      if (f.k === 'aadhaar') { const d = v.replace(/\D/g, ''); if (d.length === 12) { o.text = d.replace(/(\d{4})(?=\d)/g, '$1 '); o.mask = '•••• •••• ' + d.slice(-4); } }
-      if (f.input === 'date') o.text = fmtDate(v);
-      return row(f.label, v, o);
-    });
-    if (rows.length) html += `<div class="group-h"><span>${esc(s.title)}</span>${s.url ? `<a href="${s.url}" target="_blank" rel="noopener noreferrer">Open portal ${I.ext}</a>` : ''}</div><div class="group">${rows.join('')}</div>`;
-  }
-  const extra = [
+  html += `<nav class="qa" aria-label="Contact">
+    <a ${c.mobile ? `href="tel:${esc(c.mobile)}"` : 'aria-disabled="true"'}>${I.phone}<span>Call</span></a>
+    <a ${/^[6-9]\d{9}$/.test(mob) ? `href="https://wa.me/91${mob}" target="_blank" rel="noopener noreferrer"` : 'aria-disabled="true"'}>${I.chat}<span>WhatsApp</span></a>
+    <a ${c.email ? `href="mailto:${esc(c.email)}"` : 'aria-disabled="true"'}>${I.mail}<span>Email</span></a>
+  </nav>`;
+
+  const fieldRows = s => s.fields.filter(f => !['name', 'type', 'fileNo'].includes(f.k) && c[f.k]).map(f => {
+    const v = c[f.k], o = { secret: f.secret, mono: f.up || f.rule === 'aadhaar' || f.input === 'numeric' || f.input === 'tel', link: f.link };
+    if (f.k === 'aadhaar') { const d = v.replace(/\D/g, ''); if (d.length === 12) { o.text = d.replace(/(\d{4})(?=\d)/g, '$1 '); o.mask = '•••• •••• ' + d.slice(-4); } }
+    if (f.input === 'date') o.text = fmtDate(v);
+    return row(lab(f, c.type), v, o);
+  });
+  html += section(SECTIONS[0].title, fieldRows(SECTIONS[0]));
+  c.businesses.forEach((b, i) => {
+    const rows = [];
+    if (b.name) rows.push(row('Trade name', b.name));
+    if (b.nature) rows.push(row('Nature of business', b.nature));
+    if (b.same) rows.push(row('Business address', c.address || '', { text: `Same as ${addrLabel(c.type).toLowerCase()}`, muted: true }));
+    else if (b.address) rows.push(row('Business address', b.address));
+    if (b.udyam) rows.push(row('Udyam registration', b.udyam, { mono: true }));
+    html += section(c.businesses.length > 1 ? `Business ${i + 1}` : 'Business', rows);
+  });
+  for (const s of SECTIONS.slice(1)) html += section(s.title, fieldRows(s), s.url);
+  html += section('Other details', [
     ...S.meta.customFields.filter(f => c.custom[f.id]).map(f => row(f.label, c.custom[f.id], { secret: f.secret })),
     ...c.extra.filter(x => x.value).map(x => row(x.label || 'Other', x.value, { secret: x.secret })),
-  ];
-  if (extra.length) html += `<div class="group-h">Other details</div><div class="group">${extra.join('')}</div>`;
+  ]);
   html += `<p class="meta">Added ${fmtDate(c.created)}${c.updated && c.updated !== c.created ? ' · Updated ' + fmtDate(c.updated) : ''}</p>`;
   app.innerHTML = html;
 
@@ -548,47 +756,100 @@ function renderDetail(id) {
 }
 
 // ---------- edit ----------
+const msgDiv = '<div class="fmsg" hidden></div>';
 const xrow = (x = {}) => `<div class="xrow" data-secret="${x.secret ? 1 : 0}">
   <button type="button" class="rm" data-act="xdel" aria-label="Remove field"></button>
   <input class="finput xl" placeholder="Label" value="${esc(x.label)}" autocomplete="off" aria-label="Field label">
   <input class="finput xv${x.secret ? ' masked' : ''}" placeholder="Value" value="${esc(x.value)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Field value">
   <button type="button" class="ibtn" data-act="xsec" aria-label="Mark as secret">${x.secret ? I.lockSm : I.unlockSm}</button></div>`;
 
-function fieldHTML(f, v) {
-  const attrs = `data-k="${f.k}" aria-label="${esc(f.label)}" autocomplete="off" autocorrect="off" spellcheck="false"${f.up ? ' autocapitalize="characters"' : f.k === 'name' || f.k === 'address' || f.k === 'notes' || f.k === 'bankName' ? '' : ' autocapitalize="off"'}`;
+const bizBlock = (b, type) => `<div data-biz>
+  <div class="group-h"><span class="bt">Business</span><button type="button" class="linkbtn danger" data-act="bdel">Remove</button></div>
+  <div class="group">
+    <div class="frow"><span class="flabel">Trade name</span><input class="finput" data-bf="name" value="${esc(b.name)}" placeholder="e.g. Patel Traders" autocomplete="off" aria-label="Trade name"></div>
+    <div class="frow"><span class="flabel">Nature</span><input class="finput" data-bf="nature" value="${esc(b.nature)}" placeholder="e.g. Retail – textiles" autocomplete="off" aria-label="Nature of business"></div>
+    <div class="row"><span class="grow" data-same-label>Same as ${esc(addrLabel(type).toLowerCase())}</span>${sw(b.same, 'bsame', ' aria-label="Business address is the same"')}</div>
+    <div class="frow" data-baddr${b.same ? ' hidden' : ''}><span class="flabel">Address</span><textarea class="finput" data-bf="address" placeholder="Business address with PIN code" aria-label="Business address">${esc(b.address)}</textarea></div>
+    <div class="frow"><span class="flabel">Udyam no.</span><input class="finput up" data-bf="udyam" data-rule="udyam" data-norm="up" value="${esc(b.udyam)}" placeholder="UDYAM-GJ-01-1234567" autocapitalize="characters" autocomplete="off" aria-label="Udyam registration number">${msgDiv}</div>
+  </div></div>`;
+
+function fieldHTML(f, v, type) {
+  const name = lab(f, type);
+  const attrs = `data-k="${f.k}" aria-label="${esc(name)}" autocomplete="off" autocorrect="off" spellcheck="false"${
+    f.rule ? ` data-rule="${f.rule}"` : ''}${f.norm ? ` data-norm="${f.norm}"` : ''}${
+    f.up ? ' autocapitalize="characters"' : ['name', 'address', 'notes', 'bankName'].includes(f.k) ? '' : ' autocapitalize="off"'}`;
   let input;
   if (f.kind === 'select') input = `<select class="finput" ${attrs}>${f.options.map(o => `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
   else if (f.kind === 'textarea') input = `<textarea class="finput" ${attrs} placeholder="${esc(f.ph || '')}">${esc(v)}</textarea>`;
   else {
-    const type = f.input === 'tel' ? 'tel' : f.input === 'email' ? 'email' : f.input === 'date' ? 'date' : 'text';
-    input = `<input class="finput${f.up ? ' up' : ''}${f.secret ? ' masked' : ''}" type="${type}" ${attrs}${f.input === 'numeric' ? ' inputmode="numeric"' : ''}${f.max ? ` maxlength="${f.max}"` : ''}${f.check ? ` data-check="${f.check}"` : ''} placeholder="${esc(f.ph || '')}" value="${esc(v)}">`;
+    const type_ = f.input === 'tel' ? 'tel' : f.input === 'email' ? 'email' : f.input === 'date' ? 'date' : 'text';
+    input = `<input class="finput${f.up ? ' up' : ''}${f.secret ? ' masked' : ''}" type="${type_}" ${attrs}${f.input === 'numeric' ? ' inputmode="numeric"' : ''}${f.max ? ` maxlength="${f.max + 4}"` : ''} placeholder="${esc(f.ph || '')}" value="${esc(v)}">`;
   }
-  return `<div class="frow">${f.bare ? '' : `<span class="flabel">${esc(f.label)}</span>`}${input}${
-    f.secret ? `<button type="button" class="ibtn" data-act="mask" aria-label="Show or hide ${esc(f.label)}">${I.eye}</button>` : ''}${
-    f.check ? `<div class="fwarn" hidden>${CHECK_MSG[f.check]}</div>` : ''}</div>`;
+  return `<div class="frow${f.bare ? ' bare' : ''}">${f.bare ? '' : `<span class="flabel" data-lab="${f.k}">${esc(name)}</span>`}${input}${
+    f.secret ? `<button type="button" class="ibtn" data-act="mask" aria-label="Show or hide ${esc(name)}">${I.eye}</button>` : ''}${
+    f.rule || f.k === 'name' ? msgDiv : ''}</div>`;
 }
 
 function renderEdit(id) {
   const orig = id && S.clients.find(x => x.id === id);
-  const c = orig ? structuredClone(orig) : { type: 'Individual', custom: {}, extra: [] };
+  const c = orig ? structuredClone(orig) : tidy({ type: 'Individual' });
+  const sec = s => `<div class="group-h">${esc(s.title)}</div><div class="group">${s.fields.map(f => fieldHTML(f, c[f.k] || '', c.type)).join('')}</div>`;
   let html = bar({ left: `<button class="nav-btn" data-act="cancel">Cancel</button>`, title: orig ? 'Edit Client' : 'New Client', right: `<button class="nav-btn strong" data-act="save">${orig ? 'Done' : 'Save'}</button>` });
-  html += `<form id="form" autocomplete="off">`;
-  for (const s of SECTIONS) html += `<div class="group-h">${esc(s.title)}</div><div class="group">${s.fields.map(f => fieldHTML(f, c[f.k] || '')).join('')}</div>`;
+  html += `<form id="form" autocomplete="off" novalidate>`;
+  html += sec(SECTIONS[0]);
+  html += `<div id="bizs">${c.businesses.map(b => bizBlock(b, c.type)).join('')}</div>
+    <div class="group"><button type="button" class="row addrow" data-act="badd"><span class="plus">+</span><span id="baddLabel"></span></button></div>
+    <p class="foot">Add a shop, firm or trade name the client runs, with its address if it’s different.</p>`;
+  for (const s of SECTIONS.slice(1, -1)) html += sec(s);
   if (S.meta.customFields.length) html += `<div class="group-h">Custom fields</div><div class="group">${S.meta.customFields.map(f =>
     `<div class="frow"><span class="flabel">${esc(f.label)}</span><input class="finput${f.secret ? ' masked' : ''}" data-c="${esc(f.id)}" value="${esc(c.custom[f.id] || '')}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="${esc(f.label)}">${f.secret ? `<button type="button" class="ibtn" data-act="mask" aria-label="Show or hide">${I.eye}</button>` : ''}</div>`).join('')}</div>`;
   html += `<div class="group-h">Other details</div><div class="group" id="xg">${c.extra.map(xrow).join('')}<button type="button" class="row addrow" data-act="xadd"><span class="plus">+</span>Add field</button></div>`;
-  html += `<p class="foot">Use the lock icon to mark a value as secret — it stays hidden until you tap the eye.</p>`;
-  if (orig) html += `<div class="group"><button type="button" class="row danger" data-act="del" style="justify-content:center">Delete Client</button></div>`;
+  html += `<p class="foot">Use the lock icon to keep a value hidden until you tap the eye.</p>`;
+  html += sec(SECTIONS[SECTIONS.length - 1]);
+  if (orig) html += `<div class="group"><button type="button" class="row danger" data-act="del">Delete Client</button></div>`;
   html += `</form>`;
   app.innerHTML = html;
 
   const form = $('#form');
   form.onsubmit = e => e.preventDefault();
   let dirty = false;
-  const check = el => { const w = el.parentElement.querySelector('.fwarn'); const v = el.value.trim().toUpperCase(); w.hidden = !v || CHECKS[el.dataset.check](v); };
-  form.addEventListener('input', e => { dirty = true; const el = e.target; if (el.dataset.check && !el.parentElement.querySelector('.fwarn').hidden) check(el); });
-  form.addEventListener('focusout', e => { if (e.target.dataset?.check) check(e.target); });
-  $$('[data-check]', form).forEach(el => el.value && check(el));
+  const typeSel = $('[data-k="type"]', form);
+  const ctx = () => ({ type: typeSel.value, pan: NORM.id($('[data-k="pan"]', form).value) });
+  const check = (el, normalise) => {
+    if (normalise && el.dataset.norm && el.value.trim()) el.value = NORM[el.dataset.norm](el.value);
+    const v = el.value.trim(), rule = RULES[el.dataset.rule];
+    const res = v && rule ? rule(el.dataset.norm ? NORM[el.dataset.norm](v) : v, ctx()) : null;
+    showMsg(el, res);
+    return res;
+  };
+  const showMsg = (el, res) => {
+    const row = el.closest('.frow'), m = $('.fmsg', row);
+    m.hidden = !res; m.textContent = res?.msg || ''; m.className = 'fmsg ' + (res?.level || '');
+    row.classList.toggle('bad', res?.level === 'err');
+    el.setAttribute('aria-invalid', res?.level === 'err' ? 'true' : 'false');
+  };
+  const relabel = () => {
+    const t = typeSel.value;
+    $('[data-lab="dob"]', form).textContent = dobLabel(t);
+    $('[data-lab="address"]', form).textContent = addrLabel(t);
+    $$('[data-same-label]', form).forEach(s => { s.textContent = `Same as ${addrLabel(t).toLowerCase()}`; });
+    const n = $$('[data-biz]', form).length;
+    $$('[data-biz]', form).forEach((b, i) => { $('.bt', b).textContent = n > 1 ? `Business ${i + 1}` : 'Business'; });
+    $('#baddLabel').textContent = n ? 'Add another business' : PERSONAL.has(t) ? 'Add business details' : 'Add trade name or branch';
+  };
+  relabel();
+  form.addEventListener('input', e => {
+    dirty = true;
+    const el = e.target;
+    if (el.dataset.rule && !$('.fmsg', el.closest('.frow')).hidden) check(el, false);
+  });
+  form.addEventListener('focusout', e => {
+    const el = e.target;
+    if (el.dataset?.rule || el.dataset?.norm) check(el, true);
+    if (el.dataset?.k === 'pan') { const g = $('[data-k="gstin"]', form); if (g.value.trim()) check(g, false); }
+  });
+  typeSel.addEventListener('change', () => { relabel(); const p = $('[data-k="pan"]', form); if (p.value.trim()) check(p, false); });
+  $$('[data-rule]', form).forEach(el => el.value.trim() && check(el, false));
   if (!orig) setTimeout(() => $('[data-k="name"]').focus(), 50);
 
   ACT.cancel = () => { if (!dirty || confirm('Discard your changes?')) orig ? go('detail', id) : go('list'); };
@@ -596,20 +857,47 @@ function renderEdit(id) {
   ACT.xadd = t => { t.insertAdjacentHTML('beforebegin', xrow()); dirty = true; t.previousElementSibling.querySelector('.xl').focus(); };
   ACT.xdel = t => { t.closest('.xrow').remove(); dirty = true; };
   ACT.xsec = t => { const r = t.closest('.xrow'); const on = r.dataset.secret !== '1'; r.dataset.secret = on ? 1 : 0; $('.xv', r).classList.toggle('masked', on); t.innerHTML = on ? I.lockSm : I.unlockSm; dirty = true; };
+  ACT.badd = () => { $('#bizs').insertAdjacentHTML('beforeend', bizBlock({}, typeSel.value)); dirty = true; relabel(); $('#bizs [data-biz]:last-child [data-bf="name"]').focus(); };
+  ACT.bdel = t => {
+    const b = t.closest('[data-biz]');
+    if ($$('[data-bf]', b).some(i => i.value.trim()) && !confirm('Remove this business?')) return;
+    b.remove(); dirty = true; relabel();
+  };
+  ACT.bsame = t => { const on = t.getAttribute('aria-checked') !== 'true'; t.setAttribute('aria-checked', on); t.closest('[data-biz]').querySelector('[data-baddr]').hidden = on; dirty = true; };
   ACT.del = async () => {
     if (!canWrite() || !confirm(`Delete ${orig.name}? This can’t be undone.`)) return;
     try { await deleteClient(id); toast('Client deleted'); go('list'); } catch (e) { toast(errText(e)); }
   };
   ACT.save = async t => {
     if (!canWrite()) return;
+    // Normalise and validate everything first.
+    const results = $$('[data-rule]', form).map(el => [el, check(el, true)]).filter(([, r]) => r);
+    const nameEl = $('[data-k="name"]', form);
+    if (!nameEl.value.trim()) { showMsg(nameEl, err('Name is required')); results.unshift([nameEl, err('Name is required')]); }
+    else showMsg(nameEl, null);
+    const errors = results.filter(([, r]) => r.level === 'err');
+    if (errors.length) {
+      toast(errors.length === 1 ? 'Please fix the highlighted field' : `Please fix ${errors.length} highlighted fields`);
+      errors[0][0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return errors[0][0].focus({ preventScroll: true });
+    }
     const d = { ...c, custom: {}, extra: [] };
-    $$('[data-k]', form).forEach(el => { let v = el.value.trim(); if (UPPER.has(el.dataset.k)) v = v.toUpperCase(); if (v) d[el.dataset.k] = v; else delete d[el.dataset.k]; });
+    $$('[data-k]', form).forEach(el => { const v = el.value.trim(); if (v) d[el.dataset.k] = v; else delete d[el.dataset.k]; });
     $$('[data-c]', form).forEach(el => { const v = el.value.trim(); if (v) d.custom[el.dataset.c] = v; });
     d.extra = $$('.xrow', form).map(r => ({ label: $('.xl', r).value.trim(), value: $('.xv', r).value.trim(), secret: r.dataset.secret === '1' })).filter(x => x.label || x.value);
-    if (!d.name) { toast('Name is required'); return $('[data-k="name"]').focus(); }
-    if (!d.pan && d.gstin && CHECKS.gstin(d.gstin)) d.pan = d.gstin.slice(2, 12);
-    if ($$('.fwarn', form).some(w => !w.hidden) && !confirm('Some IDs don’t look valid. Save anyway?')) return;
-    if (d.pan) { const dup = S.clients.find(x => x.id !== c.id && x.pan === d.pan); if (dup && !confirm(`${dup.name} already has PAN ${d.pan}. Save anyway?`)) return; }
+    d.businesses = $$('[data-biz]', form).map(b => {
+      const g = k => $(`[data-bf="${k}"]`, b).value.trim();
+      const same = $('.switch', b).getAttribute('aria-checked') === 'true';
+      return { name: g('name'), nature: g('nature'), same, address: same ? '' : g('address'), udyam: g('udyam') };
+    }).filter(b => b.name || b.nature || b.address || b.udyam);
+    if (!d.pan && d.gstin && !RULES.gstin(d.gstin, {})) d.pan = d.gstin.slice(2, 12);
+    if (d.itPass && !d.itUser && d.pan) d.itUser = d.pan;
+    const warnings = results.filter(([, r]) => r.level === 'warn').map(([, r]) => '• ' + r.msg);
+    for (const k of ['pan', 'gstin']) {
+      const dup = d[k] && S.clients.find(x => x.id !== c.id && x[k] === d[k]);
+      if (dup) warnings.push(`• ${dup.name} already has this ${k.toUpperCase()}`);
+    }
+    if (warnings.length && !confirm(`Please check:\n${warnings.join('\n')}\n\nSave anyway?`)) return;
     const now = Date.now();
     if (!d.id) { d.id = uid(); d.created = now; }
     d.updated = now;
@@ -623,15 +911,12 @@ const errText = e => e instanceof TypeError ? 'No internet connection — not sa
 // ---------- settings ----------
 function renderSettings() {
   const lockOpts = [[0, 'When I leave the app'], [60, 'After 1 minute'], [300, 'After 5 minutes'], [900, 'After 15 minutes']];
-  const cf = S.meta.customFields;
+  const cf = S.meta.customFields, bioOn = !!bioRecord();
   app.innerHTML = bar({ left: backBtn('Clients', 'back'), title: 'Settings' }) + `
-    <div class="group-h">Account</div>
-    <div class="group">
-      <div class="row"><span class="grow">${DB.demo ? 'Mode' : 'Signed in as'}</span><span class="val">${esc(DB.user.email)}</span></div>
-      ${DB.demo ? '' : `<button class="row link" data-act="signout">Sign out of this device</button>`}
-    </div>
     <div class="group-h">Security</div>
     <div class="group">
+      <div class="row"><span class="grow">Unlock with ${esc(BIO)}${BIO_OK ? '' : '<small>Not available on this device</small>'}</span>${sw(bioOn, 'bio', BIO_OK || bioOn ? '' : ' disabled')}</div>
+      ${bioPending ? `<button class="row link" data-act="bioFinish">Finish setting up ${esc(BIO)}</button>` : ''}
       <label class="row"><span class="grow">Auto-lock</span><select class="plain" id="lockAfter">${lockOpts.map(([v, l]) => `<option value="${v}"${settings.lockAfter === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <button class="row link" data-act="changepw">Change master password</button>
       <button class="row link" data-act="lock">Lock now</button>
@@ -639,7 +924,7 @@ function renderSettings() {
     <div class="group-h">Custom fields</div>
     <div class="group">
       ${cf.map(f => `<div class="row"><span class="grow">${esc(f.label)}</span>${f.secret ? '<span class="tag">Secret</span>' : ''}<button class="nav-btn" style="color:var(--danger);min-height:0;padding:4px" data-act="cfdel" data-id="${esc(f.id)}">Remove</button></div>`).join('')}
-      <div class="row"><input id="cfName" class="finput" placeholder="New field, e.g. MCA login" autocomplete="off" style="padding:0"><button class="toggle" data-act="cfsec" aria-pressed="false">Secret</button><button class="nav-btn strong" style="min-height:0;padding:4px" data-act="cfadd">Add</button></div>
+      <div class="row"><input id="cfName" class="finput" placeholder="New field, e.g. MCA login" autocomplete="off" style="padding:0" aria-label="New custom field name"><button class="toggle" data-act="cfsec" aria-pressed="false">Secret</button><button class="nav-btn strong" style="min-height:0;padding:4px" data-act="cfadd">Add</button></div>
     </div>
     <p class="foot">Custom fields appear on every client. For one-off details, use “Add field” inside a client.</p>
     <div class="group-h">Backup</div>
@@ -647,19 +932,30 @@ function renderSettings() {
       <button class="row link" data-act="export">Export encrypted backup</button>
       <button class="row link" data-act="import">Import backup</button>
     </div>
-    <p class="foot">${settings.lastBackup ? 'Last exported ' + fmtDate(settings.lastBackup) + '. ' : ''}A backup file is encrypted with the master password used when it was made. Keep one in iCloud Drive or Google Drive.</p>
-    <p class="foot center" style="margin-top:0">${S.clients.length} client${S.clients.length === 1 ? '' : 's'} · AES-256 encrypted on this device before upload</p>
+    <p class="foot">${settings.lastBackup ? 'Last exported ' + fmtDate(settings.lastBackup) + '. ' : ''}A backup opens only with the master password used when it was made. Keep one in iCloud Drive or Google Drive.</p>
+    <div class="group-h">Account</div>
+    <div class="group">
+      <div class="row"><span class="grow">${DB.demo ? 'Mode' : 'Signed in as'}</span><span class="val">${esc(DB.user.email)}</span></div>
+      ${DB.demo ? '' : `<button class="row link" data-act="signout">Sign out of this device</button>`}
+    </div>
+    <p class="foot center" style="margin-top:-12px">${plural(S.clients.length, 'client')} · End-to-end encrypted</p>
     <input type="file" id="file" accept=".json,application/json" hidden>`;
 
   $('#lockAfter').onchange = e => { settings.lockAfter = +e.target.value; saveSettings(); toast('Auto-lock updated'); };
   ACT.back = () => go('list');
   ACT.lock = () => lock();
+  ACT.bio = () => {
+    if (bioRecord()) { writeLS(bioKey(), null); toast(`${BIO} unlock is off`); return renderSettings(); }
+    bioTurnOn(() => renderSettings());
+  };
+  ACT.bioFinish = () => bioTurnOn(() => renderSettings());
   ACT.changepw = () => { if (canWrite()) go('changepw'); };
-  ACT.signout = () => { if (confirm('Sign out of this device? You’ll need your account password to sign in again.')) signOut(); };
+  ACT.signout = () => { if (confirm('Sign out of this device? You’ll need your email and password to sign in again.')) signOut(); };
   ACT.cfsec = t => { const on = t.classList.toggle('on'); t.setAttribute('aria-pressed', on); };
   ACT.cfadd = async () => {
     const label = $('#cfName').value.trim();
-    if (!label || !canWrite()) return label || $('#cfName').focus();
+    if (!label) return $('#cfName').focus();
+    if (!canWrite()) return;
     if (cf.some(f => f.label.toLowerCase() === label.toLowerCase())) return toast('That field already exists');
     cf.push({ id: uid(), label, secret: $('[data-act="cfsec"]').classList.contains('on') });
     try { await saveMeta(); toast('Field added'); renderSettings(); } catch (e) { cf.pop(); toast(errText(e)); }
@@ -690,7 +986,7 @@ function exportBackup() {
   const done = () => { settings.lastBackup = Date.now(); saveSettings(); if (cur.v === 'settings') renderSettings(); toast('Backup exported'); };
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     suppressLock = true;
-    navigator.share({ files: [file], title: name }).then(done, err => { if (err.name !== 'AbortError') toast('Export failed'); }).finally(() => { suppressLock = false; });
+    navigator.share({ files: [file], title: name }).then(done, er => { if (er.name !== 'AbortError') toast('Export failed'); }).finally(() => { suppressLock = false; });
   } else {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(file); a.download = name; document.body.append(a); a.click();
@@ -708,25 +1004,25 @@ function renderChangePw() {
         <input class="field" id="p2" type="password" placeholder="Confirm new password" autocomplete="new-password">
         <button class="btn primary" id="go" type="submit">Change password</button>
         <p class="err" id="err" role="alert"></p>
-        <p class="hint">Your other devices will need the new password next time they unlock. Old backup files still open with the old password.</p>
+        <p class="hint">Your other devices will ask for the new password next time. ${esc(BIO)} keeps working. Old backup files still open with the old password.</p>
       </div>
     </form>`;
   ACT.back = () => go('settings');
   $('#f').onsubmit = async e => {
     e.preventDefault();
-    const err = $('#err'), btn = $('#go'), a = $('#p1').value;
-    if (a.length < 10) return (err.textContent = 'Use at least 10 characters.');
-    if (a !== $('#p2').value) return (err.textContent = 'New passwords don’t match.');
+    const er = $('#err'), btn = $('#go'), a = $('#p1').value;
+    if (a.length < 10) return (er.textContent = 'Use at least 10 characters.');
+    if (a !== $('#p2').value) return (er.textContent = 'New passwords don’t match.');
     btn.disabled = true; btn.textContent = 'Checking…';
     try { await unwrapDek($('#p0').value, S.vault); }
-    catch { btn.disabled = false; btn.textContent = 'Change password'; return (err.textContent = 'Current password is wrong.'); }
+    catch { btn.disabled = false; btn.textContent = 'Change password'; return (er.textContent = 'Current password is wrong.'); }
     btn.textContent = 'Saving…';
     try {
       const w = await wrapDek(a, S.raw);
       await DB.putVault(w);
       Object.assign(S.vault, w); PV = { vault: S.vault, offline: false }; writeCache();
       toast('Master password changed'); go('settings');
-    } catch (ex) { btn.disabled = false; btn.textContent = 'Change password'; err.textContent = errText(ex); }
+    } catch (ex) { btn.disabled = false; btn.textContent = 'Change password'; er.textContent = errText(ex); }
   };
 }
 
@@ -734,7 +1030,7 @@ function renderImport(b) {
   app.innerHTML = bar({ left: backBtn('Settings', 'back'), title: 'Import Backup' }) + `
     <form id="f" class="pad" autocomplete="off">
       <div class="stack" style="max-width:none">
-        <p class="hint" style="margin:0 2px 6px">Backup from ${fmtDate(b.saved)} with ${b.clients.length} client${b.clients.length === 1 ? '' : 's'}. Clients you already have are kept; the newer copy wins.</p>
+        <p class="hint" style="margin:0 2px 6px">Backup from ${fmtDate(b.saved)} with ${plural(b.clients.length, 'client')}. Clients you already have are kept; the newer copy wins.</p>
         <input class="field" id="pw" type="password" placeholder="Master password used for this backup" autocomplete="off">
         <button class="btn primary" id="go" type="submit">Import</button>
         <p class="err" id="err" role="alert"></p>
@@ -744,11 +1040,11 @@ function renderImport(b) {
   $('#f').onsubmit = async e => {
     e.preventDefault();
     if (!canWrite()) return;
-    const btn = $('#go'), err = $('#err');
+    const btn = $('#go'), er = $('#err');
     btn.disabled = true; btn.textContent = 'Decrypting…';
     let key;
     try { key = await dataKey(await unwrapDek($('#pw').value, b.vault)); }
-    catch { btn.disabled = false; btn.textContent = 'Import'; return (err.textContent = 'Wrong password for this backup.'); }
+    catch { btn.disabled = false; btn.textContent = 'Import'; return (er.textContent = 'Wrong password for this backup.'); }
     try {
       let n = 0;
       if (b.vault.metaCt) {
@@ -757,25 +1053,26 @@ function renderImport(b) {
         if (add.length) { S.meta.customFields.push(...add); await saveMeta(); }
       }
       for (const r of b.clients) {
-        const c = await decJSON(key, r); c.id = r.id; c.custom ||= {}; c.extra ||= [];
+        const c = tidy(await decJSON(key, r)); c.id = r.id;
         const mine = S.clients.find(x => x.id === c.id);
         if (mine && (mine.updated || 0) >= (c.updated || 0)) continue;
         btn.textContent = `Importing ${++n}…`;
         await saveClient(c);
       }
-      toast(n ? `Imported ${n} client${n === 1 ? '' : 's'}` : 'Nothing new to import');
+      toast(n ? `Imported ${plural(n, 'client')}` : 'Nothing new to import');
       go('list');
-    } catch (ex) { btn.disabled = false; btn.textContent = 'Import'; err.textContent = errText(ex); }
+    } catch (ex) { btn.disabled = false; btn.textContent = 'Import'; er.textContent = errText(ex); }
   };
 }
 
 // ---------- start ----------
 addEventListener('unhandledrejection', e => { console.error(e.reason); toast(errText(e.reason || {})); });
 if (!window.isSecureContext || !crypto.subtle) {
-  app.innerHTML = `<main class="lock"><h1>Needs HTTPS</h1><p class="sub">Open this app from its https:// address.</p></main>`;
+  app.innerHTML = `<main class="lock"><h1>Needs a secure connection</h1><p class="sub">Open this app from its https:// address.</p></main>`;
 } else {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   navigator.storage?.persist?.();
+  bioAvailable().then(ok => { BIO_OK = ok; if (S && cur.v === 'list') renderList(); });
   openVault();
 }
 })();

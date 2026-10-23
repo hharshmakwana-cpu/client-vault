@@ -388,10 +388,88 @@ const initials = n => (n || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).
 const hue = n => { let h = 0; for (const ch of n || '') h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
 const avatar = (n, big) => `<div class="avatar${big ? ' big' : ''}" style="--h:${hue(n)}" aria-hidden="true">${esc(initials(n))}</div>`;
 
+// ---------- navigation ----------
+// Screens deeper in the app slide in from the right ("push") and back out ("pop"), like iOS.
+const DEPTH = { list: 0, detail: 1, settings: 1, edit: 2, changepw: 2, import: 2 };
+const PARENT = { detail: () => 'list', settings: () => 'list', changepw: () => 'settings', import: () => 'settings', edit: id => id ? 'detail' : 'list' };
+const snaps = {}; // last look of each screen, shown underneath while swiping back
+let skipAnim = false;
 function go(v, arg, keepScroll) {
+  const from = cur.v;
+  if (from && app.querySelector('.bar')) snaps[from] = { html: app.innerHTML, y: scrollY, arg: cur.arg };
   cur = { v, arg }; ACT = {};
   ({ list: renderList, detail: renderDetail, edit: renderEdit, settings: renderSettings, changepw: renderChangePw, import: renderImport })[v](arg);
   if (!keepScroll) scrollTo(0, 0);
+  const dir = keepScroll || skipAnim || !from || from === v ? '' : DEPTH[v] > DEPTH[from] ? 'push' : DEPTH[v] < DEPTH[from] ? 'pop' : '';
+  app.classList.remove('push', 'pop');
+  clearTimeout(animTimer);
+  if (dir) { void app.offsetWidth; app.classList.add(dir); animTimer = setTimeout(() => app.classList.remove('push', 'pop'), 400); }
+}
+let animTimer;
+// Going back returns to where you were scrolled, e.g. the same spot in a long client list.
+function goBack(v, arg) {
+  const s = snaps[v];
+  go(v, arg);
+  if (s && s.arg === arg) scrollTo(0, s.y);
+}
+app.addEventListener('animationend', () => app.classList.remove('push', 'pop'));
+
+// Swipe right from the left edge to go back, with the previous screen showing underneath.
+let swipe = null;
+addEventListener('touchstart', e => {
+  swipe = null;
+  const t = e.touches[0];
+  if (!S || e.touches.length !== 1 || t.clientX > 28 || !PARENT[cur.v] || !(ACT.back || ACT.cancel)) return;
+  swipe = { x: t.clientX, y: t.clientY, t: Date.now(), dx: 0, dir: null, under: null };
+}, { passive: true });
+addEventListener('touchmove', e => {
+  const s = swipe;
+  if (!s) return;
+  const t = e.touches[0], dx = t.clientX - s.x, dy = t.clientY - s.y;
+  if (!s.dir) {
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+    s.dir = dx > Math.abs(dy) ? 'h' : 'v';
+    if (s.dir === 'v') { swipe = null; return; }
+    startSwipe(s);
+  }
+  e.preventDefault();
+  s.dx = Math.max(0, dx);
+  paintSwipe(s, s.dx, false);
+}, { passive: false });
+addEventListener('touchend', endSwipe);
+addEventListener('touchcancel', endSwipe);
+function startSwipe(s) {
+  const target = PARENT[cur.v](cur.arg), snap = snaps[target];
+  const ok = snap && (target !== 'detail' || snap.arg === cur.arg);
+  s.under = document.createElement('div');
+  s.under.className = 'under';
+  s.under.setAttribute('aria-hidden', 'true');
+  // The copy is just a picture: drop ids so lookups like $('#list') can't land in it.
+  s.under.innerHTML = `<div class="under-in">${ok ? snap.html.replace(/\sid="[^"]*"/g, '') : ''}</div>`;
+  document.body.insertBefore(s.under, app);
+  if (ok) s.under.scrollTop = snap.y;
+  app.classList.remove('push', 'pop'); // a running slide animation would override the drag
+  document.body.classList.add('swiping');
+  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+}
+function paintSwipe(s, dx, animate) {
+  const p = Math.min(1, dx / innerWidth), tr = animate ? 'transform .25s cubic-bezier(.2,.8,.2,1)' : 'none';
+  app.style.transition = tr; app.style.transform = `translateX(${dx}px)`;
+  s.under.style.transition = tr; s.under.style.transform = `translateX(${(p - 1) * 30}%)`;
+  s.under.style.setProperty('--dim', (0.12 * (1 - p)).toFixed(3));
+}
+function endSwipe() {
+  const s = swipe;
+  swipe = null;
+  if (!s || s.dir !== 'h') return;
+  const speed = s.dx / Math.max(1, Date.now() - s.t);
+  const done = s.dx > innerWidth * 0.35 || (speed > 0.45 && s.dx > 30);
+  paintSwipe(s, done ? innerWidth : 0, true);
+  setTimeout(() => {
+    s.under.remove(); document.body.classList.remove('swiping');
+    if (done) { const back = ACT.back || ACT.cancel; skipAnim = true; try { back?.(); } finally { skipAnim = false; } }
+    app.style.transition = ''; app.style.transform = '';
+  }, 250);
 }
 
 // ---------- vault data helpers ----------
@@ -550,7 +628,8 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 function lock() {
-  S = null; Q = ''; ACT = {}; bioPending = null;
+  S = null; Q = ''; ACT = {}; bioPending = null; cur = { v: null };
+  for (const k in snaps) delete snaps[k]; // snapshots contain client data — drop them on lock
   document.body.classList.remove('cover');
   openVault();
 }
@@ -885,7 +964,7 @@ function renderDetail(id) {
   app.innerHTML = html;
 
   const timers = {};
-  ACT.back = () => go('list');
+  ACT.back = () => goBack('list');
   ACT.edit = () => { if (canWrite()) go('edit', id); };
   ACT.copy = async t => {
     const v = vals[+t.dataset.i];
@@ -1041,7 +1120,7 @@ function renderEdit(id) {
   });
   typeSel.addEventListener('change', () => { typeTouched = true; relabel(); validateAll(); });
 
-  ACT.cancel = () => { if (!dirty || confirm('Discard your changes?')) orig ? go('detail', id) : go('list'); };
+  ACT.cancel = () => { if (!dirty || confirm('Discard your changes?')) orig ? goBack('detail', id) : goBack('list'); };
   ACT.mask = t => { const el = t.parentElement.querySelector('.finput'); const m = el.classList.toggle('masked'); t.innerHTML = m ? I.eye : I.eyeOff; };
   ACT.xadd = t => { t.insertAdjacentHTML('beforebegin', xrow()); dirty = true; t.previousElementSibling.querySelector('.xl').focus(); };
   ACT.xdel = t => { t.closest('.xrow').remove(); dirty = true; };
@@ -1143,7 +1222,7 @@ function renderSettings() {
     <input type="file" id="file" accept=".json,application/json" hidden>`;
 
   $('#lockAfter').onchange = e => { settings.lockAfter = +e.target.value; saveSettings(); toast('Auto-lock updated'); };
-  ACT.back = () => go('list');
+  ACT.back = () => goBack('list');
   ACT.lock = () => lock();
   ACT.bio = () => {
     if (bioRecord()) { writeLS(bioKey(), null); toast(`${BIO} unlock is off`); return renderSettings(); }
@@ -1208,7 +1287,7 @@ function renderChangePw() {
         <p class="hint">Your other devices will ask for the new password next time. ${esc(BIO)} keeps working. Old backup files still open with the old password.</p>
       </div>
     </form>`;
-  ACT.back = () => go('settings');
+  ACT.back = () => goBack('settings');
   $('#f').onsubmit = async e => {
     e.preventDefault();
     const er = $('#err'), btn = $('#go'), a = $('#p1').value;
@@ -1237,7 +1316,7 @@ function renderImport(b) {
         <p class="err" id="err" role="alert"></p>
       </div>
     </form>`;
-  ACT.back = () => go('settings');
+  ACT.back = () => goBack('settings');
   $('#f').onsubmit = async e => {
     e.preventDefault();
     if (!canWrite()) return;

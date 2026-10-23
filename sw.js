@@ -1,5 +1,5 @@
 // Offline support. Bump CACHE when you change any file.
-const CACHE = 'client-vault-v4';
+const CACHE = 'client-vault-v5';
 const ASSETS = ['./', './index.html', './app.js', './config.js', './manifest.json',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
@@ -19,7 +19,8 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
-  e.respondWith(fetch(e.request).then(r => {
+  // 'no-cache' revalidates with the server, so the browser's 10-minute HTTP cache can't serve an old version.
+  e.respondWith(fetch(e.request.url, { cache: 'no-cache' }).then(r => {
     if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
     return r;
   }).catch(() => caches.match(e.request, { ignoreSearch: true })));

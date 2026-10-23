@@ -357,6 +357,7 @@ const I = {
   eye: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
   eyeOff: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/></svg>',
   copy: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>',
   search: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4" stroke-linecap="round"/></svg>',
   lock: '<svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
   lockSm: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2.2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></svg>',
@@ -380,8 +381,9 @@ app.addEventListener('click', e => {
   if (t && ACT[t.dataset.act]) { e.preventDefault(); ACT[t.dataset.act](t, e); }
 });
 
-const bar = ({ left = '', title = '', right = '' }) =>
-  `<header class="bar"><div class="bar-row"><div>${left}</div><div class="bar-t">${esc(title)}</div><div class="bar-r">${right}</div></div></header>`;
+// big: the page has its own large title; the small one fades into the bar once that scrolls away.
+const bar = ({ left = '', title = '', right = '', big = false }) =>
+  `<header class="bar${big ? ' has-big' : ''}"><div class="bar-row"><div>${left}</div><div class="bar-t">${esc(title)}</div><div class="bar-r">${right}</div></div></header>`;
 const backBtn = (label, act) => `<button class="nav-btn back" data-act="${act}">${I.back}<span>${esc(label)}</span></button>`;
 const sw = (on, act, extra = '') => `<button type="button" class="switch" role="switch" aria-checked="${!!on}" data-act="${act}"${extra}></button>`;
 const initials = n => (n || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
@@ -389,30 +391,93 @@ const hue = n => { let h = 0; for (const ch of n || '') h = (h * 31 + ch.charCod
 const avatar = (n, big) => `<div class="avatar${big ? ' big' : ''}" style="--h:${hue(n)}" aria-hidden="true">${esc(initials(n))}</div>`;
 
 // ---------- navigation ----------
-// Screens deeper in the app slide in from the right ("push") and back out ("pop"), like iOS.
+// Like iOS: a deeper screen slides in from the right over the previous one ("push") and slides
+// back out ("pop"); the edit screen rises as a sheet ("present") and drops away ("dismiss").
+// The outgoing screen is copied into a layer so both are visible while they move.
 const DEPTH = { list: 0, detail: 1, settings: 1, edit: 2, changepw: 2, import: 2 };
 const PARENT = { detail: () => 'list', settings: () => 'list', changepw: () => 'settings', import: () => 'settings', edit: id => id ? 'detail' : 'list' };
 const snaps = {}; // last look of each screen, shown underneath while swiping back
-let skipAnim = false;
+const EASE = 'cubic-bezier(.32,.72,0,1)', DUR = 460;
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+let skipAnim = false, finishTransition = null;
+
+function makeLayer(kind, nodes) {
+  const layer = document.createElement('div');
+  layer.className = 'layer ' + kind;
+  layer.setAttribute('aria-hidden', 'true');
+  const inner = document.createElement('div');
+  inner.className = 'layer-in';
+  inner.append(...nodes);
+  // The copy is just a picture: drop ids so lookups like $('#list') can't land in it.
+  inner.querySelectorAll('[id]').forEach(e => e.removeAttribute('id'));
+  const dim = document.createElement('div');
+  dim.className = 'dim';
+  layer.append(inner, dim);
+  return layer;
+}
+// cloneNode keeps what was typed into inputs, so a closing form doesn't flash old values.
+const copyOfApp = kind => makeLayer(kind, [...app.childNodes].map(n => n.cloneNode(true)));
+
+function transition(mode, layer, y) {
+  finishTransition?.();
+  const below = mode === 'push' || mode === 'present';
+  document.body.insertBefore(layer, below ? app : app.nextSibling);
+  layer.scrollTop = y;
+  if (mode === 'dismiss') layer.classList.add('sheet');
+  // Scale around the middle of what's on screen, not the middle of a long page.
+  app.style.transformOrigin = `50% ${scrollY + innerHeight / 2}px`;
+  const o = { duration: DUR, easing: EASE };
+  const move = (el, a, b) => el.animate([{ transform: a }, { transform: b }], o);
+  const fade = (el, a, b) => el.animate([{ opacity: a }, { opacity: b }], o);
+  const dim = layer.lastChild;
+  const anims =
+    mode === 'push' ? [move(app, 'translateX(100%)', 'none'), move(layer, 'none', 'translateX(-30%)'), fade(dim, 0, .1)]
+    : mode === 'pop' ? [move(app, 'translateX(-30%)', 'none'), move(layer, 'none', 'translateX(100%)')]
+    : mode === 'present' ? [move(app, 'translateY(100%)', 'none'), move(layer, 'none', 'scale(.94)'), fade(dim, 0, .2)]
+    : [move(layer, 'none', 'translateY(100%)'), move(app, 'scale(.94)', 'none')];
+  document.body.classList.add('animating', 'anim-' + mode);
+  const done = () => {
+    finishTransition = null;
+    anims.forEach(a => a.cancel());
+    layer.remove();
+    app.style.transformOrigin = '';
+    document.body.classList.remove('animating', 'anim-' + mode);
+  };
+  finishTransition = done;
+  const end = () => { if (finishTransition === done) done(); };
+  Promise.all(anims.map(a => a.finished)).then(end, () => {});
+  setTimeout(end, DUR + 400); // never leave the screen untappable if the animation is paused
+}
+
 function go(v, arg, keepScroll) {
-  const from = cur.v;
-  if (from && app.querySelector('.bar')) snaps[from] = { html: app.innerHTML, y: scrollY, arg: cur.arg };
+  const from = cur.v, live = !!(from && app.querySelector('.bar'));
+  if (live) snaps[from] = { html: app.innerHTML, y: scrollY, arg: cur.arg };
+  const mode = !live || keepScroll || skipAnim || from === v || reduceMotion() ? ''
+    : v === 'edit' ? 'present' : from === 'edit' ? 'dismiss'
+    : DEPTH[v] > DEPTH[from] ? 'push' : DEPTH[v] < DEPTH[from] ? 'pop' : '';
+  const layer = mode && copyOfApp(mode === 'push' || mode === 'present' ? 'under' : 'over'), y = scrollY;
   cur = { v, arg }; ACT = {};
   ({ list: renderList, detail: renderDetail, edit: renderEdit, settings: renderSettings, changepw: renderChangePw, import: renderImport })[v](arg);
   if (!keepScroll) scrollTo(0, 0);
-  const dir = keepScroll || skipAnim || !from || from === v ? '' : DEPTH[v] > DEPTH[from] ? 'push' : DEPTH[v] < DEPTH[from] ? 'pop' : '';
-  app.classList.remove('push', 'pop');
-  clearTimeout(animTimer);
-  if (dir) { void app.offsetWidth; app.classList.add(dir); animTimer = setTimeout(() => app.classList.remove('push', 'pop'), 400); }
+  // Start after any scroll restore by goBack(), but before the browser paints.
+  queueMicrotask(() => { if (layer) transition(mode, layer, y); updateBar(); });
 }
-let animTimer;
 // Going back returns to where you were scrolled, e.g. the same spot in a long client list.
 function goBack(v, arg) {
   const s = snaps[v];
   go(v, arg);
   if (s && s.arg === arg) scrollTo(0, s.y);
 }
-app.addEventListener('animationend', () => app.classList.remove('push', 'pop'));
+
+// Hairline under the bar once content scrolls beneath it, and the small title once the large one is gone.
+function updateBar() {
+  const b = app.querySelector('.bar');
+  if (!b) return;
+  b.classList.toggle('edge', scrollY > 1);
+  const big = app.querySelector('[data-big]');
+  if (big) b.classList.toggle('collapsed', big.getBoundingClientRect().bottom < b.getBoundingClientRect().bottom + 4);
+}
+addEventListener('scroll', updateBar, { passive: true });
 
 // Swipe right from the left edge to go back, with the previous screen showing underneath.
 let swipe = null;
@@ -420,7 +485,7 @@ addEventListener('touchstart', e => {
   swipe = null;
   const t = e.touches[0];
   if (!S || e.touches.length !== 1 || t.clientX > 28 || !PARENT[cur.v] || !(ACT.back || ACT.cancel)) return;
-  swipe = { x: t.clientX, y: t.clientY, t: Date.now(), dx: 0, dir: null, under: null };
+  swipe = { x: t.clientX, y: t.clientY, t: Date.now(), dx: 0, dir: null, layer: null };
 }, { passive: true });
 addEventListener('touchmove', e => {
   const s = swipe;
@@ -439,24 +504,22 @@ addEventListener('touchmove', e => {
 addEventListener('touchend', endSwipe);
 addEventListener('touchcancel', endSwipe);
 function startSwipe(s) {
+  finishTransition?.();
   const target = PARENT[cur.v](cur.arg), snap = snaps[target];
   const ok = snap && (target !== 'detail' || snap.arg === cur.arg);
-  s.under = document.createElement('div');
-  s.under.className = 'under';
-  s.under.setAttribute('aria-hidden', 'true');
-  // The copy is just a picture: drop ids so lookups like $('#list') can't land in it.
-  s.under.innerHTML = `<div class="under-in">${ok ? snap.html.replace(/\sid="[^"]*"/g, '') : ''}</div>`;
-  document.body.insertBefore(s.under, app);
-  if (ok) s.under.scrollTop = snap.y;
-  app.classList.remove('push', 'pop'); // a running slide animation would override the drag
+  const tpl = document.createElement('template');
+  tpl.innerHTML = ok ? snap.html : '';
+  s.layer = makeLayer('under', [...tpl.content.childNodes]);
+  document.body.insertBefore(s.layer, app);
+  if (ok) s.layer.scrollTop = snap.y;
   document.body.classList.add('swiping');
   if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
 }
 function paintSwipe(s, dx, animate) {
-  const p = Math.min(1, dx / innerWidth), tr = animate ? 'transform .25s cubic-bezier(.2,.8,.2,1)' : 'none';
+  const p = Math.min(1, dx / innerWidth), tr = animate ? `transform .35s ${EASE}, opacity .35s` : 'none';
   app.style.transition = tr; app.style.transform = `translateX(${dx}px)`;
-  s.under.style.transition = tr; s.under.style.transform = `translateX(${(p - 1) * 30}%)`;
-  s.under.style.setProperty('--dim', (0.12 * (1 - p)).toFixed(3));
+  s.layer.style.transition = tr; s.layer.style.transform = `translateX(${(p - 1) * 30}%)`;
+  s.layer.lastChild.style.transition = tr; s.layer.lastChild.style.opacity = (0.1 * (1 - p)).toFixed(3);
 }
 function endSwipe() {
   const s = swipe;
@@ -466,10 +529,10 @@ function endSwipe() {
   const done = s.dx > innerWidth * 0.35 || (speed > 0.45 && s.dx > 30);
   paintSwipe(s, done ? innerWidth : 0, true);
   setTimeout(() => {
-    s.under.remove(); document.body.classList.remove('swiping');
+    s.layer.remove(); document.body.classList.remove('swiping');
     if (done) { const back = ACT.back || ACT.cancel; skipAnim = true; try { back?.(); } finally { skipAnim = false; } }
     app.style.transition = ''; app.style.transform = '';
-  }, 250);
+  }, 350);
 }
 
 // ---------- vault data helpers ----------
@@ -628,6 +691,7 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 function lock() {
+  finishTransition?.();
   S = null; Q = ''; ACT = {}; bioPending = null; cur = { v: null };
   for (const k in snaps) delete snaps[k]; // snapshots contain client data — drop them on lock
   document.body.classList.remove('cover');
@@ -864,9 +928,10 @@ function renderList() {
     : `<div class="banner info"><span class="grow">Unlock faster with ${esc(BIO)}.</span><button class="bbtn" data-act="bioOn">Turn on</button><button class="bx" data-act="bioNo" aria-label="Dismiss">×</button></div>`;
   app.innerHTML = bar({
     left: `<button class="nav-btn" data-act="settings">Settings</button>`,
+    title: 'Clients', big: true,
     right: `<button class="nav-btn" data-act="add" aria-label="Add client">${I.plus}</button>`,
   }) + `
-    <h1 class="large">Clients</h1>
+    <h1 class="large" data-big>Clients</h1>
     <div class="search">${I.search}<input id="q" type="search" placeholder="Name, PAN, GSTIN, mobile, business…" value="${esc(Q)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Search clients"></div>
     <div class="chips" id="chips" role="tablist" aria-label="Filter by status"></div>
     ${banner}<div id="list"></div>`;
@@ -929,8 +994,8 @@ function renderDetail(id) {
   });
 
   const mob = normMobile(c.mobile || '');
-  let html = bar({ left: backBtn('Clients', 'back'), right: `<button class="nav-btn" data-act="edit">Edit</button>` });
-  html += `<div class="hero">${avatar(c.name, true)}<h2>${esc(c.name)}</h2><p>${esc([c.type, c.fileNo && 'File ' + c.fileNo].filter(Boolean).join(' · '))}</p></div>`;
+  let html = bar({ left: backBtn('Clients', 'back'), title: c.name, big: true, right: `<button class="nav-btn" data-act="edit">Edit</button>` });
+  html += `<div class="hero">${avatar(c.name, true)}<h2 data-big>${esc(c.name)}</h2><p>${esc([c.type, c.fileNo && 'File ' + c.fileNo].filter(Boolean).join(' · '))}</p></div>`;
   html += `<nav class="qa" aria-label="Contact">
     <a ${c.mobile ? `href="tel:${esc(c.mobile)}"` : 'aria-disabled="true"'}>${I.phone}<span>Call</span></a>
     <a ${/^[6-9]\d{9}$/.test(mob) ? `href="https://wa.me/91${mob}" target="_blank" rel="noopener noreferrer"` : 'aria-disabled="true"'}>${I.chat}<span>WhatsApp</span></a>
@@ -968,7 +1033,12 @@ function renderDetail(id) {
   ACT.edit = () => { if (canWrite()) go('edit', id); };
   ACT.copy = async t => {
     const v = vals[+t.dataset.i];
-    try { await navigator.clipboard.writeText(v.raw); toast(`${v.label} copied`); } catch { toast('Couldn’t copy'); }
+    try {
+      await navigator.clipboard.writeText(v.raw);
+      toast(`${v.label} copied`);
+      t.innerHTML = I.check; t.classList.add('done');
+      setTimeout(() => { t.innerHTML = I.copy; t.classList.remove('done'); }, 1400);
+    } catch { toast('Couldn’t copy'); }
   };
   ACT.reveal = t => {
     const i = +t.dataset.i, v = vals[i], el = $('#v' + i), hidden = el.textContent === v.mask;

@@ -22,9 +22,9 @@ const CSV_COLS = {
   aadhaar: ['aadhaar', 'aadhar', 'aadhaar no', 'aadhar no', 'aadhaar number'], mobile: ['mobile', 'phone', 'mobile no', 'contact no', 'contact', 'mobile number'],
   email: ['email', 'email id', 'e-mail'], dob: ['dob', 'date of birth', 'doi', 'date of incorporation', 'dob / doi'], address: ['address'],
   gstin: ['gstin', 'gst no', 'gst number', 'gst'], gstUser: ['gst username', 'gst user', 'gst user id'], gstPass: ['gst password'],
-  itUser: ['it user id', 'income tax user id', 'it user'], itPass: ['it password', 'income tax password'],
+  itPass: ['it password', 'income tax password'],
   tracesUser: ['traces user id', 'traces user'], tracesPass: ['traces password'], tan: ['tan', 'tan no'],
-  regNo: ['cin', 'llpin', 'cin / llpin', 'reg no', 'registration no'], contact: ['contact person'],
+  regNo: ['cin', 'llpin', 'cin / llpin', 'reg no', 'registration no'], contact: ['contact person', 'contact name'],
   bankName: ['bank', 'bank name'], bankAcc: ['account no', 'bank account', 'account number', 'bank account no'], ifsc: ['ifsc', 'ifsc code'],
   business: ['business name', 'trade name'], notes: ['notes', 'remarks'],
 };
@@ -52,11 +52,12 @@ function csvToClients(text) {
     c.name = get('name').replace(/\s+/g, ' ');
     const pan = NORM.id(get('pan')), rawType = get('type');
     c.type = (TYPE_WORDS.find(([re]) => re.test(rawType)) || [])[1] || (PAN_RE.test(pan) && PAN_TO_TYPE[pan[3]]) || 'Individual';
-    for (const k of ['fileNo', 'group', 'address', 'itPass', 'tracesPass', 'bankName', 'notes', 'contact']) { const v = get(k); if (v) c[k] = v; }
+    for (const k of ['fileNo', 'group', 'address', 'itPass', 'tracesPass', 'bankName', 'notes']) { const v = get(k); if (v) c[k] = v; }
+    if (get('contact')) c.contacts = [{ name: get('contact'), role: '', mobile: '', email: '' }];
     if (pan) c.pan = pan;
     const set = (k, norm) => { const v = get(k); if (v) c[k] = NORM[norm](v); };
     set('aadhaar', 'aadhaar'); set('mobile', 'mobile'); set('email', 'lower'); set('tan', 'id'); set('regNo', 'id');
-    set('itUser', 'id'); set('tracesUser', 'up'); set('bankAcc', 'digits'); set('ifsc', 'id');
+    set('tracesUser', 'up'); set('bankAcc', 'digits'); set('ifsc', 'id');
     const dob = csvDate(get('dob'));
     if (dob === null) errors.push(`Date “${get('dob')}” isn’t a valid date (use DD/MM/YYYY)`); else if (dob) c.dob = dob;
     const gstins = get('gstin').split(/[;,\s]+/).map(NORM.id).filter(Boolean);
@@ -71,7 +72,7 @@ function csvToClients(text) {
     const check = (rule, v) => { if (!v || !RULES[rule]) return; const res = RULES[rule](v, x); if (res?.level === 'err') errors.push(res.msg); else if (res?.level === 'warn') warns.push(res.msg); };
     check('name', c.name || 'x'); if (!c.name) errors.push('Name is missing');
     check('pan', c.pan); check('aadhaar', PERSONAL.has(c.type) && c.aadhaar); check('mobile', c.mobile); check('email', c.email);
-    check('dob', c.dob); check('tan', c.tan); check('regNo', c.regNo); check('ifsc', c.ifsc); check('bankAcc', c.bankAcc); check('itUser', c.itUser);
+    check('dob', c.dob); check('tan', c.tan); check('regNo', c.regNo); check('ifsc', c.ifsc); check('bankAcc', c.bankAcc);
     gstins.forEach(g => check('gstin', g));
     if (c.pan) { if (seen.pan.has(c.pan)) errors.push(`Same PAN as row ${seen.pan.get(c.pan)}`); else seen.pan.set(c.pan, n); }
     gstins.forEach(g => { if (seen.gstin.has(g)) errors.push(`Same GSTIN as row ${seen.gstin.get(g)}`); else seen.gstin.set(g, n); });
@@ -102,7 +103,7 @@ function exportClientsCSV() {
   const head = ['Name', 'Status', 'File no', 'Group', 'PAN', 'Aadhaar (masked)', 'Mobile', 'Email', 'DOB / DOI', 'Address', 'GSTIN', 'TAN', 'CIN / LLPIN', 'Business names', 'Contact person', 'Fees outstanding'];
   const rows = [...S.clients].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(c => [
     c.name, c.type, c.fileNo, c.group, c.pan, c.aadhaar ? 'XXXX XXXX ' + aadhaarDigits(c.aadhaar).slice(-4) : '', c.mobile, c.email, dmy(c.dob),
-    c.address, c.gst.map(g => g.gstin).filter(Boolean).join('; '), c.tan, c.regNo, c.businesses.map(b => b.name).filter(Boolean).join('; '), c.contact, feeTotals(c).due || '',
+    c.address, c.gst.map(g => g.gstin).filter(Boolean).join('; '), c.tan, c.regNo, c.businesses.map(b => b.name).filter(Boolean).join('; '), c.contacts.map(p => [p.name, p.mobile].filter(Boolean).join(' ')).join('; '), feeTotals(c).due || '',
   ]);
   saveFile(`client-list-${todayStr()}.csv`, toCSV([head, ...rows]), 'text/csv', () => toast('Client list exported'));
 }

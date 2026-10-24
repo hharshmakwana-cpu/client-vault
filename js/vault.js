@@ -11,6 +11,9 @@ async function applyMeta() {
 function tidy(c) {
   c.custom ||= {}; c.extra ||= []; c.businesses ||= [];
   c.comp ||= {}; c.work ||= {}; c.fees ||= []; c.pwd ||= {}; // returns tracked, filing status, fee ledger, password dates
+  // Contact persons used to be one text field; the Income Tax login ID is always the PAN.
+  if (!c.contacts) c.contacts = c.contact ? [{ name: c.contact, role: '', mobile: '', email: '' }] : [];
+  delete c.contact; delete c.itUser;
   if (!c.gst) c.gst = c.gstin || c.gstUser || c.gstPass ? [{ gstin: c.gstin || '', user: c.gstUser || '', pass: c.gstPass || '' }] : [];
   delete c.gstin; delete c.gstUser; delete c.gstPass;
   if (c.type === 'Proprietorship') c.type = 'Individual';

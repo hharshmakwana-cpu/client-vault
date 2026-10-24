@@ -92,7 +92,7 @@ function tasksOf(c, until) {
 const pwDays = () => S.meta.pwDays ?? 180;
 const PORTAL_URL = { it: 'https://eportal.incometax.gov.in/iec/foservices/#/login', traces: 'https://www.tdscpc.gov.in/app/login.xhtml', gst: GST_URL };
 function portalsOf(c) {
-  const list = [{ p: 'it', name: 'Income Tax', user: c.itUser || c.pan || '', pass: c.itPass || '', url: PORTAL_URL.it }];
+  const list = [{ p: 'it', name: 'Income Tax', user: c.pan || '', pass: c.itPass || '', url: PORTAL_URL.it }];
   c.gst.forEach((g, i) => list.push({ p: 'gst:' + i, pw: 'gst:' + g.gstin, name: c.gst.length > 1 ? `GST · ${GST_STATES[g.gstin?.slice(0, 2)] || g.gstin}` : 'GST', user: g.user || '', pass: g.pass || '', url: PORTAL_URL.gst }));
   list.push({ p: 'traces', name: 'TRACES', user: c.tracesUser || '', pass: c.tracesPass || '', url: PORTAL_URL.traces });
   for (const x of list) x.pw ||= x.p;

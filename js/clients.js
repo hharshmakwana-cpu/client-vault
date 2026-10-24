@@ -3,7 +3,8 @@
 
 // ---------- list ----------
 function haystack(c) {
-  const parts = [c.name, c.pan, c.mobile, c.email, c.fileNo, c.tan, c.itUser, c.type, c.regNo, c.contact, c.group];
+  const parts = [c.name, c.pan, c.mobile, c.email, c.fileNo, c.tan, c.type, c.regNo, c.group];
+  for (const p of c.contacts) parts.push(p.name, p.role, p.mobile, p.email);
   for (const g of c.gst) parts.push(g.gstin, g.user);
   for (const b of c.businesses) parts.push(b.name, b.nature, b.udyam);
   for (const f of S.meta.customFields) if (!f.secret && c.custom[f.id]) parts.push(c.custom[f.id]);
@@ -136,6 +137,13 @@ function renderDetail(id) {
   html += section('Fees', [`<button class="row" data-act="fees"><span class="grow">${f.due > 0 ? 'Outstanding' : f.billed ? 'All paid' : 'No fees recorded'}<small>Billed ${inr(f.billed)} · Received ${inr(f.received)}</small></span><span class="amt${f.due > 0 ? ' due' : ''}">${inr(f.due)}</span><span class="chev">${I.chev}</span></button>`]);
 
   html += section(SECTIONS[0].title, fieldRows(SECTIONS[0]));
+  html += section(c.contacts.length > 1 ? 'Contact persons' : 'Contact person', c.contacts.map((p, i) => {
+    const m = normMobile(p.mobile || ''), ok = /^[6-9]\d{9}$/.test(m);
+    return `<div class="row"><div class="dcol"><div class="dval">${esc(p.name || 'Contact')}</div><div class="dnote">${esc([p.role, p.mobile, p.email].filter(Boolean).join(' · '))}</div></div>${
+      p.mobile ? `<a class="ibtn" href="tel:${esc(p.mobile)}" aria-label="Call ${esc(p.name)}">${I.phone}</a>` : ''}${
+      ok ? `<button class="ibtn" data-act="cwa" data-i="${i}" aria-label="WhatsApp ${esc(p.name)}">${I.chat}</button>` : ''}${
+      p.email ? `<a class="ibtn" href="mailto:${esc(p.email)}" aria-label="Email ${esc(p.name)}">${I.mail}</a>` : ''}</div>`;
+  }));
   if (PERSONAL.has(c.type)) c.businesses.forEach((b, i) => {
     const rows = [];
     if (b.name) rows.push(row('Trade name', b.name));
@@ -146,7 +154,7 @@ function renderDetail(id) {
     html += section(c.businesses.length > 1 ? `Business ${i + 1}` : 'Business', rows);
   });
   html += section(SECTIONS[1].title, fieldRows(SECTIONS[1]));
-  html += section(SECTIONS[2].title, fieldRows(SECTIONS[2]), loginBtn('it'));
+  html += section(SECTIONS[2].title, [...(c.pan ? [row('User ID', c.pan, { mono: true, note: 'Same as the PAN' })] : []), ...fieldRows(SECTIONS[2])], loginBtn('it'));
   c.gst.forEach((g, i) => {
     const rows = [];
     if (g.gstin) rows.push(row('GSTIN', g.gstin, { mono: true }));
@@ -175,6 +183,7 @@ function renderDetail(id) {
   ACT.alldue = () => { DUEF = 'open'; go('due'); };
   ACT.login = t => go('login', { id, p: t.dataset.p, back: 'detail' });
   ACT.open = t => go('detail', t.dataset.id);
+  ACT.cwa = t => openWhatsApp(c.contacts[+t.dataset.i], '');
   ACT.copy = async t => {
     const v = vals[+t.dataset.i];
     try {
@@ -214,6 +223,15 @@ const bizBlock = (b, type) => `<div data-biz>
     <div class="frow"><span class="flabel">Udyam no.</span><input class="finput up" data-bf="udyam" data-rule="udyam" data-norm="id" value="${esc(b.udyam)}" placeholder="UDYAM-GJ-01-1234567" autocapitalize="characters" ${inputAttrs} aria-label="Udyam registration number">${msgDiv}</div>
   </div></div>`;
 
+const contactBlock = p => `<div data-contact>
+  <div class="group-h"><span class="ct">Contact person</span><button type="button" class="linkbtn danger" data-act="cdel">Remove</button></div>
+  <div class="group">
+    <div class="frow"><span class="flabel">Name</span><input class="finput" data-cf="name" value="${esc(p.name)}" placeholder="e.g. Suresh Patel" autocomplete="off" aria-label="Contact name"></div>
+    <div class="frow"><span class="flabel">Role</span><input class="finput" data-cf="role" value="${esc(p.role)}" placeholder="Director, partner, accountant…" autocomplete="off" aria-label="Contact role"></div>
+    <div class="frow"><span class="flabel">Mobile</span><input class="finput" type="tel" data-cf="mobile" data-rule="mobile" data-norm="mobile" value="${esc(p.mobile)}" placeholder="10-digit number" ${inputAttrs} aria-label="Contact mobile">${msgDiv}</div>
+    <div class="frow"><span class="flabel">Email</span><input class="finput" type="email" data-cf="email" data-rule="email" data-norm="lower" value="${esc(p.email)}" autocapitalize="off" ${inputAttrs} aria-label="Contact email">${msgDiv}</div>
+  </div></div>`;
+
 const gstBlock = g => `<div data-gst>
   <div class="group-h"><span class="gt">GST registration</span><button type="button" class="linkbtn danger" data-act="gdel">Remove</button></div>
   <div class="group">
@@ -226,7 +244,7 @@ function fieldHTML(f, v, type) {
   const name = fnv(f.label, type);
   const attrs = `data-k="${f.k}" aria-label="${esc(name)}" ${inputAttrs}${
     f.rule ? ` data-rule="${f.rule}"` : ''}${f.norm ? ` data-norm="${f.norm}"` : ''}${
-    f.up ? ' autocapitalize="characters"' : ['name', 'address', 'notes', 'bankName', 'contact'].includes(f.k) ? '' : ' autocapitalize="off"'}`;
+    f.up ? ' autocapitalize="characters"' : ['name', 'address', 'notes', 'bankName'].includes(f.k) ? '' : ' autocapitalize="off"'}`;
   let input;
   if (f.kind === 'select') {
     const opts = TYPES.includes(v) || !v ? TYPES : [...TYPES, v];
@@ -257,6 +275,9 @@ function renderEdit(id) {
   html += `<form id="form" autocomplete="off" novalidate>`;
   html += sec('Basic details', fieldsOf(BASIC));
   if (gstFirst) html += gstHTML;
+  html += `<div id="contacts">${c.contacts.map(contactBlock).join('')}</div>
+    <div class="group"><button type="button" class="row addrow" data-act="cadd"><span class="plus">+</span><span id="caddLabel"></span></button></div>
+    <p class="foot" id="cfoot">Someone you deal with for this client — a director, partner, family member or their accountant.</p>`;
   html += `<div class="group" id="moreBtn"${expanded ? ' hidden' : ''}><button type="button" class="row addrow" data-act="more"><span class="plus">+</span><span class="grow">Add more details<small>Address, Aadhaar, date of birth, business, portal logins, bank…</small></span></button></div>`;
   if (!orig) html += `<p class="foot"${expanded ? ' hidden' : ''} id="moreFoot">Only the name is needed. You can add the rest any time.</p>`;
   html += `<div id="more"${expanded ? '' : ' hidden'}>`;
@@ -264,7 +285,10 @@ function renderEdit(id) {
   html += `<div id="bizSec"${PERSONAL.has(c.type) ? '' : ' hidden'}><div id="bizs">${c.businesses.map(b => bizBlock(b, c.type)).join('')}</div>
     <div class="group"><button type="button" class="row addrow" data-act="badd"><span class="plus">+</span><span id="baddLabel"></span></button></div>
     <p class="foot">For a proprietary business or trade name run by this ${c.type === 'HUF' ? 'HUF' : 'person'}, with its address if it’s different.</p></div>`;
-  html += sec('Identity', rest(SECTIONS[1])) + sec(SECTIONS[2].title, SECTIONS[2].fields);
+  html += sec('Identity', rest(SECTIONS[1]));
+  // The Income Tax login ID is always the PAN, so it's shown, not typed.
+  html += `<div class="group-h">${esc(SECTIONS[2].title)}</div><div class="group"><div class="frow"><span class="flabel">User ID</span><span class="finput mono itid" id="itUserShow"></span></div>${SECTIONS[2].fields.map(f => fieldHTML(f, c[f.k] || '', c.type)).join('')}</div>
+    <p class="foot">The login ID is the PAN, filled in from above.</p>`;
   if (!gstFirst) html += gstHTML;
   for (const s of SECTIONS.slice(3, -1)) html += sec(s.title, s.fields);
   if (S.meta.customFields.length) html += `<div class="group-h">Custom fields</div><div class="group">${S.meta.customFields.map(f =>
@@ -312,6 +336,15 @@ function renderEdit(id) {
       return r && [el, r];
     }).filter(Boolean);
   };
+  const showItId = () => {
+    const pan = NORM.id(val('pan')), el = $('#itUserShow');
+    el.textContent = pan || 'Enter the PAN above';
+    el.classList.toggle('muted', !PAN_RE.test(pan));
+  };
+  form.addEventListener('input', e => { if (e.target.dataset.k === 'pan') showItId(); });
+  // Pressing a button on the form shouldn't first take focus away from the field being typed in:
+  // that shows the field's check message, which pushes the button down and the tap misses it.
+  form.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
   const relabel = () => {
     const t = typeSel.value;
     for (const f of FIELDS) {
@@ -327,6 +360,11 @@ function renderEdit(id) {
     $$('[data-gst]', form).forEach((g, i) => { $('.gt', g).textContent = ng > 1 ? `GST registration ${i + 1}` : 'GST registration'; });
     $('#baddLabel').textContent = nb ? 'Add another business' : 'Add business / trade name';
     $('#gaddLabel').textContent = ng ? 'Add another GST registration' : 'Add GST registration';
+    const nc = $$('[data-contact]', form).length;
+    $$('[data-contact]', form).forEach((b, i) => { $('.ct', b).textContent = nc > 1 ? `Contact person ${i + 1}` : 'Contact person'; });
+    $('#caddLabel').textContent = nc ? 'Add another contact person' : 'Add contact person';
+    $('#cfoot').hidden = nc > 0;
+    showItId();
   };
   relabel();
   if (orig) validateAll();
@@ -365,6 +403,12 @@ function renderEdit(id) {
     b.remove(); dirty = true; relabel();
   };
   ACT.bsame = t => { const on = t.getAttribute('aria-checked') !== 'true'; t.setAttribute('aria-checked', on); t.closest('[data-biz]').querySelector('[data-baddr]').hidden = on; dirty = true; };
+  ACT.cadd = () => { $('#contacts').insertAdjacentHTML('beforeend', contactBlock({})); dirty = true; relabel(); $('#contacts [data-contact]:last-child [data-cf="name"]').focus(); };
+  ACT.cdel = t => {
+    const b = t.closest('[data-contact]');
+    if ($$('[data-cf]', b).some(i => i.value.trim()) && !confirm('Remove this contact person?')) return;
+    b.remove(); dirty = true; relabel();
+  };
   ACT.gadd = () => { $('#gsts').insertAdjacentHTML('beforeend', gstBlock({})); dirty = true; relabel(); $('#gsts [data-gst]:last-child [data-gf="gstin"]').focus(); };
   ACT.gdel = t => {
     const g = t.closest('[data-gst]');
@@ -407,7 +451,11 @@ function renderEdit(id) {
     }).filter(g => g.gstin || g.user || g.pass);
     const firstGstin = d.gst.find(g => GSTIN_RE.test(g.gstin))?.gstin;
     if (!d.pan && firstGstin) d.pan = firstGstin.slice(2, 12);
-    if (d.itPass && !d.itUser && d.pan) d.itUser = d.pan;
+    d.contacts = $$('[data-contact]', form).map(b => {
+      const g = k => $(`[data-cf="${k}"]`, b).value.trim();
+      return { name: g('name'), role: g('role'), mobile: g('mobile'), email: g('email') };
+    }).filter(p => p.name || p.mobile || p.email);
+    delete d.itUser;
     // Remember when each portal password was last changed, for the change reminders.
     d.pwd = { ...c.pwd };
     const stamp = (k, before, now) => { if (!now) delete d.pwd[k]; else if (now !== before || !d.pwd[k]) d.pwd[k] = todayStr(); };

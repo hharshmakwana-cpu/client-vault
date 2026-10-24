@@ -23,7 +23,6 @@ const SECTIONS = [
     { k: 'type', label: 'Status', kind: 'select' },
     { k: 'fileNo', label: 'File no.', ph: 'Optional' },
     { k: 'group', label: 'Group', ph: 'Family or group, e.g. Patel family', list: true },
-    { k: 'contact', label: 'Contact person', ph: 'Director / partner / trustee', show: t => !PERSONAL.has(t) },
     { k: 'mobile', label: 'Mobile', input: 'tel', rule: 'mobile', norm: 'mobile', ph: '10-digit number', link: 'tel:' },
     { k: 'email', label: 'Email', input: 'email', rule: 'email', norm: 'lower', link: 'mailto:' },
     { k: 'dob', label: dobLabel, input: 'date', rule: 'dob' },
@@ -36,7 +35,6 @@ const SECTIONS = [
     { k: 'tan', label: 'TAN', up: true, max: 10, rule: 'tan', norm: 'id', ph: 'If they deduct TDS' },
   ] },
   { title: 'Income Tax portal', portal: 'it', fields: [
-    { k: 'itUser', label: 'User ID', up: true, rule: 'itUser', norm: 'id', ph: 'The PAN' },
     { k: 'itPass', label: 'Password', secret: true },
   ] },
   { title: 'TRACES', portal: 'traces', fields: [
@@ -142,11 +140,6 @@ const RULES = {
     if (dup) return err(`This TAN is already saved for ${dup.name}`);
     const names = [c.name, ...c.biz].join(' ');
     if (names.trim() && !initialsOf(names).includes(v[3])) return warn(`TAN’s 4th letter ${v[3]} should be the first letter of the deductor’s name`);
-    return null;
-  },
-  itUser: (v, c) => {
-    if (PAN_RE.test(c.pan) && v !== c.pan) return warn('The Income Tax login ID is the PAN — this doesn’t match');
-    if (!PAN_RE.test(v)) return warn('The Income Tax login ID is normally the PAN');
     return null;
   },
   gstin: (v, c) => {

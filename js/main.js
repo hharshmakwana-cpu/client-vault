@@ -2,6 +2,11 @@
 // Start-up.
 
 // ---------- start ----------
+// Behave like an installed app: iPhone Safari ignores "no zoom" in the page settings, so stop
+// its pinch gestures here (scrolling, typing and copying still work normally).
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+
 addEventListener('unhandledrejection', e => { console.error(e.reason); toast(errText(e.reason || {})); });
 if (!window.isSecureContext || !crypto.subtle) {
   app.innerHTML = `<main class="lock"><h1>Needs a secure connection</h1><p class="sub">Open this app from its https:// address.</p></main>`;

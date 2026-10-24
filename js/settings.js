@@ -5,7 +5,15 @@
 function renderSettings() {
   const lockOpts = [[0, 'When I leave the app'], [60, 'After 1 minute'], [300, 'After 5 minutes'], [900, 'After 15 minutes']];
   const cf = S.meta.customFields, bioOn = !!bioRecord();
+  // Everyday settings first; the rest is one tap away under "More options".
+  const adv = settings.advOpen;
   app.innerHTML = bar({ title: 'Settings', big: true }) + `<h1 class="large" data-big>Settings</h1>` + `
+    <div class="group-h">Your practice</div>
+    <div class="group">
+      <button class="row" data-act="firm"><span class="grow">Firm details<small>Name, address, GST and bank details for invoices</small></span><span class="chev">${I.chev}</span></button>
+      <button class="row" data-act="work"><span class="grow">Work you handle<small>${esc(SERVICES.filter(x => handles(x[0])).map(x => x[1]).join(', '))}</small></span><span class="chev">${I.chev}</span></button>
+      <button class="row" data-act="templates"><span class="grow">WhatsApp messages</span><span class="chev">${I.chev}</span></button>
+    </div>
     <div class="group-h">Security</div>
     <div class="group">
       <div class="row"><span class="grow">Unlock with ${esc(BIO)}${BIO_OK ? '' : '<small>Not available on this device</small>'}</span>${sw(bioOn, 'bio', BIO_OK || bioOn ? '' : ' disabled')}</div>
@@ -14,22 +22,14 @@ function renderSettings() {
       <button class="row link" data-act="changepw">Change master password</button>
       <button class="row link" data-act="lock">Lock now</button>
     </div>
-    <div class="group-h">Custom fields</div>
+    <div class="group-h">Backup</div>
     <div class="group">
-      ${cf.map(f => `<div class="row"><span class="grow">${esc(f.label)}</span>${f.secret ? '<span class="tag">Secret</span>' : ''}<button class="nav-btn" style="color:var(--danger);min-height:0;padding:4px" data-act="cfdel" data-id="${esc(f.id)}">Remove</button></div>`).join('')}
-      <div class="row"><input id="cfName" class="finput" placeholder="New field, e.g. MCA login" autocomplete="off" style="padding:0" aria-label="New custom field name"><button class="toggle" data-act="cfsec" aria-pressed="false">Secret</button><button class="nav-btn strong" style="min-height:0;padding:4px" data-act="cfadd">Add</button></div>
+      <button class="row link" data-act="export">Export encrypted backup</button>
+      <button class="row link" data-act="import">Import backup</button>
     </div>
-    <p class="foot">Custom fields appear on every client. For one-off details, use “Add field” inside a client.</p>
-    <div class="group-h">Practice</div>
-    <div class="group">
-      <button class="row" data-act="dash"><span class="grow">Overview</span><span class="chev">${I.chev}</span></button>
-      <button class="row" data-act="due"><span class="grow">Due dates</span><span class="chev">${I.chev}</span></button>
-      <button class="row" data-act="templates"><span class="grow">WhatsApp messages</span><span class="chev">${I.chev}</span></button>
-      <button class="row" data-act="firm"><span class="grow">Firm details<small>Name, address, GST and bank details on invoices and receipts</small></span><span class="chev">${I.chev}</span></button>
-      <button class="row" data-act="ext"><span class="grow">Due date extensions</span><span class="chev">${I.chev}</span></button>
-      <label class="row"><span class="grow">Password change reminder</span><select class="plain" id="pwDays">${[[0, 'Off'], [90, 'Every 90 days'], [120, 'Every 120 days'], [180, 'Every 180 days'], [365, 'Every year']].map(([v, l]) => `<option value="${v}"${pwDays() === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-    </div>
-    <p class="foot">Reminds you to change each portal password this long after it was last changed in the app.</p>
+    <p class="foot">${settings.lastBackup ? 'Last exported ' + fmtDate(settings.lastBackup) + '. ' : ''}A backup opens only with the master password used when it was made. Keep one in iCloud Drive or Google Drive.</p>
+    <div class="group"><button class="row" data-act="adv" aria-expanded="${!!adv}"><span class="grow">More options<small>Excel import/export, due date extensions, custom fields, password reminders</small></span><span class="chev${adv ? ' open' : ''}">${I.chev}</span></button></div>
+    <div id="adv"${adv ? '' : ' hidden'}>
     <div class="group-h">Excel</div>
     <div class="group">
       <button class="row link" data-act="csvin">Import clients from Excel (CSV)</button>
@@ -37,20 +37,27 @@ function renderSettings() {
       <button class="row link" data-act="csvsample">Download sample import file</button>
     </div>
     <p class="foot">In Excel, use File → Save As → CSV. Exported lists leave out passwords and show only the last 4 digits of Aadhaar.</p>
-    <div class="group-h">Backup</div>
+    <div class="group-h">Due dates</div>
     <div class="group">
-      <button class="row link" data-act="export">Export encrypted backup</button>
-      <button class="row link" data-act="import">Import backup</button>
+      <button class="row" data-act="ext"><span class="grow">Due date extensions</span><span class="chev">${I.chev}</span></button>
+      <label class="row"><span class="grow">Password change reminder</span><select class="plain" id="pwDays">${[[0, 'Off'], [90, 'Every 90 days'], [120, 'Every 120 days'], [180, 'Every 180 days'], [365, 'Every year']].map(([v, l]) => `<option value="${v}"${pwDays() === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
     </div>
-    <p class="foot">${settings.lastBackup ? 'Last exported ' + fmtDate(settings.lastBackup) + '. ' : ''}A backup opens only with the master password used when it was made. Keep one in iCloud Drive or Google Drive.</p>
+    <p class="foot">The reminder asks you to change each portal password this long after it was last changed in the app.</p>
+    <div class="group-h">Custom fields</div>
+    <div class="group">
+      ${cf.map(f => `<div class="row"><span class="grow">${esc(f.label)}</span>${f.secret ? '<span class="tag">Secret</span>' : ''}<button class="nav-btn" style="color:var(--danger);min-height:0;padding:4px" data-act="cfdel" data-id="${esc(f.id)}">Remove</button></div>`).join('')}
+      <div class="row"><input id="cfName" class="finput" placeholder="New field, e.g. MCA login" autocomplete="off" style="padding:0" aria-label="New custom field name"><button class="toggle" data-act="cfsec" aria-pressed="false">Secret</button><button class="nav-btn strong" style="min-height:0;padding:4px" data-act="cfadd">Add</button></div>
+    </div>
+    <p class="foot">Custom fields appear on every client. For one-off details, use “Add field” inside a client.</p>
+    <div class="group"><button class="row link" data-act="guide">Show the “Get started” checklist again</button></div>
+    </div>
     <div class="group-h">Account</div>
     <div class="group">
       <div class="row"><span class="grow">${DB.demo ? 'Mode' : 'Signed in as'}</span><span class="val">${esc(DB.user.email)}</span></div>
       ${DB.demo ? '' : `<button class="row link" data-act="signout">Sign out of this device</button>`}
     </div>
     <p class="foot center" style="margin-top:-12px">${plural(S.clients.length, 'client')} · End-to-end encrypted</p>
-    <input type="file" id="file" accept=".json,application/json" hidden>
-    <input type="file" id="csvfile" accept=".csv,text/csv,text/comma-separated-values" hidden>`;
+    <input type="file" id="file" accept=".json,application/json" hidden>`;
 
   $('#lockAfter').onchange = e => { settings.lockAfter = +e.target.value; saveSettings(); toast('Auto-lock updated'); };
   ACT.lock = () => lock();
@@ -83,20 +90,18 @@ function renderSettings() {
     S.meta.pwDays = +e.target.value;
     try { await saveMeta(); toast('Reminder updated'); } catch (er) { S.meta.pwDays = prev; toast(errText(er)); }
   };
-  ACT.dash = () => go('dash');
-  ACT.due = () => { DUEF = 'open'; go('due'); };
+  ACT.adv = t => {
+    settings.advOpen = !settings.advOpen; saveSettings();
+    $('#adv').hidden = !settings.advOpen; t.setAttribute('aria-expanded', settings.advOpen); $('.chev', t).classList.toggle('open', settings.advOpen);
+  };
+  ACT.work = () => go('welcome', { edit: true });
+  ACT.guide = () => { settings.guideHidden = false; saveSettings(); go('list'); };
   ACT.templates = () => go('templates');
   ACT.firm = () => go('firm');
   ACT.ext = () => go('ext', { back: 'settings' });
   ACT.csvout = () => exportClientsCSV();
   ACT.csvsample = () => sampleCSV();
-  ACT.csvin = () => { suppressLock = true; $('#csvfile').click(); };
-  $('#csvfile').onchange = async e => {
-    suppressLock = false;
-    const file = e.target.files[0]; if (!file) return;
-    try { go('csvimport', { rows: csvToClients(await file.text()) }); }
-    catch (er) { toast(er.message || 'Couldn’t read that file'); }
-  };
+  ACT.csvin = () => pickCsvFile();
   ACT.export = () => exportBackup();
   ACT.import = () => { suppressLock = true; $('#file').click(); };
   $('#file').onchange = async e => {

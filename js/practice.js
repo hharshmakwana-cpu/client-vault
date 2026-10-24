@@ -10,7 +10,9 @@ function renderDue() {
   html += `<div class="seg" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${DUEF === k}" class="${DUEF === k ? 'on' : ''}" data-act="duef" data-f="${k}">${l}${k !== 'filed' ? ` <b>${L[k].length}</b>` : ''}</button>`).join('')}</div>`;
   if (!list.length) {
     const any = S.clients.some(c => Object.keys(c.comp).length);
-    html += `<div class="empty"><b>${any ? 'All clear' : 'Nothing tracked yet'}</b>${any ? 'Nothing here right now.' : 'Open a client, then Compliance → Choose returns to track their due dates.'}</div>`;
+    html += any ? `<div class="empty"><b>All clear</b>Nothing here right now.</div>`
+      : `<div class="empty"><b>No due dates yet</b>Choose which returns each client files, and every due date shows up here, with reminders.
+        <div class="stack empty-actions"><button class="btn primary" data-act="pickc">${S.clients.length ? 'Choose returns for a client' : 'Add your first client'}</button></div></div>`;
   } else if (DUEF === 'filed') {
     html += `<div class="group-h">Filed in the last 60 days</div><div class="group">${list.map(t => taskRow(t)).join('')}</div>`;
   } else {
@@ -27,6 +29,7 @@ function renderDue() {
   ACT.pwtask = t => go('edit', t.dataset.id);
   ACT.bulk = () => { BULK_SENT.clear(); go('bulk'); };
   ACT.ext = () => go('ext');
+  ACT.pickc = () => { const c = S.clients.find(x => !Object.keys(x.comp).length) || S.clients[0]; c ? go('comp', { id: c.id, fresh: true }) : go('edit', null); };
 }
 
 // ---------- due date extensions (all clients) ----------
@@ -147,28 +150,41 @@ function renderTask(a) {
 }
 
 // ---------- choose returns to track ----------
-function renderComp(id) {
+// a: the client id, or { id, fresh } right after adding a client — then the usual returns are pre-ticked.
+function renderComp(a) {
+  const id = a?.id ?? a, fresh = !!a?.fresh;
   const c = S.clients.find(x => x.id === id);
   if (!c) return go('list');
-  const sel = new Set(Object.keys(c.comp)), noGst = !c.gst.some(g => GSTIN_RE.test(g.gstin));
-  let html = bar({ left: `<button class="nav-btn" data-act="back">Cancel</button>`, title: 'Returns to track', right: `<button class="nav-btn strong" data-act="save">Done</button>` });
+  const suggested = fresh && !Object.keys(c.comp).length ? suggestComp(c) : null;
+  const sel = new Set(suggested || Object.keys(c.comp)), noGst = !c.gst.some(g => GSTIN_RE.test(g.gstin));
+  let html = bar({ left: `<button class="nav-btn" data-act="back">${fresh ? 'Skip' : 'Cancel'}</button>`, title: 'Returns to track', right: `<button class="nav-btn strong" data-act="save">Done</button>` });
   html += `<p class="foot" style="margin:0 34px 16px">${esc(c.name)} · ${esc(c.type)}</p>`;
-  for (const g of ['Income Tax', 'GST', 'TDS', 'Payroll', 'ROC']) {
+  if (suggested?.size) html += `<div class="banner info">We’ve switched on the returns a ${esc(c.type === 'Individual' ? 'person' : c.type)} like this usually files. Change anything, then tap Done.</div>`;
+  const group = g => {
     const defs = COMP.filter(d => d.group === g && (!d.types || d.types.includes(c.type)));
-    if (!defs.length) continue;
-    html += `<div class="group-h">${g}</div><div class="group">${defs.map(d => `<div class="row"><span class="grow">${esc(d.name)}<small>Due ${esc(d.due)}</small></span>${sw(sel.has(d.code), 'tog', ` data-c="${d.code}" aria-label="${esc(d.name)}"`)}</div>`).join('')}</div>`;
-    if (g === 'GST' && noGst) html += `<p class="foot">Add a GSTIN to this client so GST filings show the right state and due dates.</p>`;
-  }
-  html += `<p class="foot">Tracking starts with filings due in the last 60 days. Add government extensions under Due dates → Due date extensions.</p>`;
+    if (!defs.length) return '';
+    let h = `<div class="group-h">${esc(SERVICES.find(x => x[0] === g)?.[1] || g)}</div><div class="group">${defs.map(d => `<div class="row"><span class="grow">${esc(d.name)}<small>Due ${esc(d.due)}</small></span>${sw(sel.has(d.code), 'tog', ` data-c="${d.code}" aria-label="${esc(d.name)}"`)}</div>`).join('')}</div>`;
+    if (g === 'GST' && noGst) h += `<p class="foot">Add a GSTIN to this client so GST filings show the right state and due dates.</p>`;
+    else if (g === 'GST' && suggested?.has('GSTR3BM')) h += `<p class="foot">Files quarterly under QRMP? Switch on the QRMP returns instead of the monthly ones.</p>`;
+    return h;
+  };
+  // Work the practice doesn't handle stays tucked away, unless this client already tracks some of it.
+  const groups = ['Income Tax', 'GST', 'TDS', 'Payroll', 'ROC'];
+  const main = groups.filter(g => handles(g) || COMP.some(d => d.group === g && sel.has(d.code)));
+  const other = groups.filter(g => !main.includes(g)).map(group).join('');
+  html += main.map(group).join('');
+  if (other) html += `<div class="group" id="otherBtn"><button class="row link" data-act="others">Show all returns</button></div><div id="others" hidden>${other}</div>`;
+  html += `<p class="foot">Tracking starts with filings due in the last 60 days. You can change these any time from the client’s page.</p>`;
   app.innerHTML = html;
   ACT.back = backTo;
+  ACT.others = () => { $('#others').hidden = false; $('#otherBtn').hidden = true; };
   ACT.tog = t => { const on = t.getAttribute('aria-checked') !== 'true'; t.setAttribute('aria-checked', on); on ? sel.add(t.dataset.c) : sel.delete(t.dataset.c); };
   ACT.save = async b => {
     const start = addDays(todayStr(), -60);
     b.disabled = true;
     try {
       await updateClient(c, d => { d.comp = Object.fromEntries([...sel].map(k => [k, c.comp[k] || start])); });
-      toast('Saved'); backTo();
+      toast(sel.size ? `Tracking ${plural(sel.size, 'return')}` : 'Saved'); backTo();
     } catch (e) { b.disabled = false; toast(errText(e)); }
   };
 }

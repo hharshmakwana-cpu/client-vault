@@ -125,7 +125,7 @@ function renderCreate() {
       S = { key, raw, vault, meta: { customFields: [] }, clients: [], recs: new Map(), offline: false, syncedAt: Date.now() };
       PV = { vault, offline: false };
       writeCache(); lastActive = Date.now();
-      go('list');
+      go('welcome');
     } catch (ex) {
       btn.disabled = false; btn.textContent = 'Create vault';
       er.textContent = isNet(ex) ? 'No internet connection.' : ex.message;
@@ -150,7 +150,7 @@ async function finishUnlock(raw) {
   await applyRecs(recs);
   if (!offline) writeCache();
   lastActive = Date.now();
-  go('list');
+  go(needsWelcome() ? 'welcome' : 'list');
 }
 
 let fails = +readLS('cv-fails') || 0, until = +readLS('cv-until') || 0;

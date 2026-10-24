@@ -33,8 +33,9 @@ function renderList() {
     right: `<button class="nav-btn" data-act="add" aria-label="Add client">${I.plus}</button>`,
   }) + `
     <h1 class="large" data-big>Clients</h1>
-    ${S.clients.length ? statTiles() : ''}
-    <div class="search">${I.search}<input id="q" type="search" placeholder="Name, PAN, GSTIN, mobile, group…" value="${esc(Q)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Search clients"></div>
+    ${S.clients.some(c => Object.keys(c.comp).length || c.fees.length) ? statTiles() : ''}
+    ${guideHTML()}
+    <div class="search"${S.clients.length ? '' : ' hidden'}>${I.search}<input id="q" type="search" placeholder="Name, PAN, GSTIN, mobile, group…" value="${esc(Q)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Search clients"></div>
     <div class="chips" id="chips" role="tablist" aria-label="Filter by status"></div>
     ${banner}<div id="list"></div>`;
   drawList();
@@ -46,6 +47,9 @@ function renderList() {
   ACT.filter = t => { F = t.dataset.f; drawList(); };
   ACT.sync = () => sync();
   ACT.bioOn = () => bioTurnOn(() => renderList());
+  ACT.csv = () => pickCsvFile();
+  ACT.sample = () => sampleCSV();
+  bindGuide();
   ACT.bioNo = () => { settings.bioOffer = false; saveSettings(); renderList(); toast(`You can turn on ${BIO} later in Settings`); };
 }
 function drawList() {
@@ -59,7 +63,12 @@ function drawList() {
     `<button class="chip${F === t ? ' on' : ''}" role="tab" aria-selected="${F === t}" data-act="filter" data-f="${esc(t)}">${esc(t)}<b>${n}</b></button>`).join('');
   const shown = all.filter(c => (F === 'All' || (c.type || 'Other') === F) && (!q || haystack(c).includes(q)));
   const el = $('#list');
-  if (!all.length) { el.innerHTML = `<div class="empty"><b>No clients yet</b>Tap + to add your first client.</div>`; return; }
+  if (!all.length) {
+    el.innerHTML = `<div class="empty"><b>No clients yet</b>Add clients one at a time, or bring in your whole list from Excel.
+      <div class="stack empty-actions"><button class="btn primary" data-act="add">Add a client</button><button class="btn plainbtn" data-act="csv">Import from Excel (CSV)</button>
+      <button class="linkbtn small" data-act="sample">Download a sample Excel file</button></div></div>`;
+    return;
+  }
   if (!shown.length) { el.innerHTML = `<div class="empty"><b>No matches</b>${q ? `Nothing found for “${esc(Q)}”.` : 'No clients with this status.'}</div>`; return; }
   const groups = new Map();
   for (const c of shown) { const L = /[A-Z]/i.test(c.name?.[0]) ? c.name[0].toUpperCase() : '#'; (groups.get(L) || groups.set(L, []).get(L)).push(c); }
@@ -231,23 +240,36 @@ function fieldHTML(f, v, type) {
 function renderEdit(id) {
   const orig = id && S.clients.find(x => x.id === id);
   const c = orig ? structuredClone(orig) : tidy({ type: 'Individual' });
-  const sec = s => `<div class="group-h">${esc(s.title)}</div><div class="group">${s.fields.map(f => fieldHTML(f, c[f.k] || '', c.type)).join('')}</div>`;
+  // A new client starts with just the basics; everything else opens with "Add more details".
+  const BASIC = ['name', 'type', 'mobile', 'email', 'pan'];
+  const fieldsOf = keys => keys.map(k => FIELDS.find(f => f.k === k));
+  const sec = (title, fields) => fields.length ? `<div class="group-h">${esc(title)}</div><div class="group">${fields.map(f => fieldHTML(f, c[f.k] || '', c.type)).join('')}</div>` : '';
+  const rest = s => s.fields.filter(f => !BASIC.includes(f.k));
+  const gstFirst = handles('GST') || c.gst.length; // GST is a basic detail for practices that do GST work
+  const gstHTML = `<div id="gsts">${c.gst.map(gstBlock).join('')}</div>
+    <div class="group"><button type="button" class="row addrow" data-act="gadd"><span class="plus">+</span><span id="gaddLabel"></span></button></div>
+    <p class="foot">Add one entry per GST registration (one per state).</p>`;
+  const expanded = !!orig && (FIELDS.some(f => !BASIC.includes(f.k) && c[f.k]) || c.businesses.length || c.extra.length || Object.keys(c.custom).length || (!gstFirst && c.gst.length));
   let html = bar({ left: `<button class="nav-btn" data-act="cancel">Cancel</button>`, title: orig ? 'Edit Client' : 'New Client', right: `<button class="nav-btn strong" data-act="save">${orig ? 'Done' : 'Save'}</button>` });
   html += `<form id="form" autocomplete="off" novalidate>`;
-  html += sec(SECTIONS[0]);
+  html += sec('Basic details', fieldsOf(BASIC));
+  if (gstFirst) html += gstHTML;
+  html += `<div class="group" id="moreBtn"${expanded ? ' hidden' : ''}><button type="button" class="row addrow" data-act="more"><span class="plus">+</span><span class="grow">Add more details<small>Address, Aadhaar, date of birth, business, portal logins, bank…</small></span></button></div>`;
+  if (!orig) html += `<p class="foot"${expanded ? ' hidden' : ''} id="moreFoot">Only the name is needed. You can add the rest any time.</p>`;
+  html += `<div id="more"${expanded ? '' : ' hidden'}>`;
+  html += sec('More about the client', rest(SECTIONS[0]));
   html += `<div id="bizSec"${PERSONAL.has(c.type) ? '' : ' hidden'}><div id="bizs">${c.businesses.map(b => bizBlock(b, c.type)).join('')}</div>
     <div class="group"><button type="button" class="row addrow" data-act="badd"><span class="plus">+</span><span id="baddLabel"></span></button></div>
     <p class="foot">For a proprietary business or trade name run by this ${c.type === 'HUF' ? 'HUF' : 'person'}, with its address if it’s different.</p></div>`;
-  html += sec(SECTIONS[1]) + sec(SECTIONS[2]);
-  html += `<div id="gsts">${c.gst.map(gstBlock).join('')}</div>
-    <div class="group"><button type="button" class="row addrow" data-act="gadd"><span class="plus">+</span><span id="gaddLabel"></span></button></div>
-    <p class="foot">Add one entry per GST registration (one per state).</p>`;
-  for (const s of SECTIONS.slice(3, -1)) html += sec(s);
+  html += sec('Identity', rest(SECTIONS[1])) + sec(SECTIONS[2].title, SECTIONS[2].fields);
+  if (!gstFirst) html += gstHTML;
+  for (const s of SECTIONS.slice(3, -1)) html += sec(s.title, s.fields);
   if (S.meta.customFields.length) html += `<div class="group-h">Custom fields</div><div class="group">${S.meta.customFields.map(f =>
     `<div class="frow"><span class="flabel">${esc(f.label)}</span><input class="finput${f.secret ? ' masked' : ''}" data-c="${esc(f.id)}" value="${esc(c.custom[f.id] || '')}" ${inputAttrs} autocapitalize="off" aria-label="${esc(f.label)}">${f.secret ? eyeBtn(f.label) : ''}</div>`).join('')}</div>`;
   html += `<div class="group-h">Other details</div><div class="group" id="xg">${c.extra.map(xrow).join('')}<button type="button" class="row addrow" data-act="xadd"><span class="plus">+</span>Add field</button></div>`;
   html += `<p class="foot">Use the lock icon to keep a value hidden until you tap the eye.</p>`;
-  html += sec(SECTIONS[SECTIONS.length - 1]);
+  const notes = SECTIONS[SECTIONS.length - 1];
+  html += sec(notes.title, notes.fields) + `</div>`;
   if (orig) html += `<div class="group"><button type="button" class="row danger" data-act="del">Delete Client</button></div>`;
   const groups = [...new Set(S.clients.map(x => x.group).filter(Boolean))].sort();
   html += `<datalist id="dl-group">${groups.map(g => `<option value="${esc(g)}">`).join('')}</datalist></form>`;
@@ -324,6 +346,11 @@ function renderEdit(id) {
   typeSel.addEventListener('change', () => { typeTouched = true; relabel(); validateAll(); });
 
   ACT.cancel = () => { if (!dirty || confirm('Discard your changes?')) orig ? goBack('detail', id) : goBack('list'); };
+  ACT.more = () => {
+    $('#more').hidden = false; $('#moreBtn').hidden = true; if ($('#moreFoot')) $('#moreFoot').hidden = true;
+    $('#more .finput:not([hidden])')?.focus({ preventScroll: true });
+    $('#more').scrollIntoView({ block: 'start', behavior: reduceMotion() ? 'auto' : 'smooth' });
+  };
   ACT.mask = t => { const el = t.parentElement.querySelector('.finput'); const m = el.classList.toggle('masked'); t.innerHTML = m ? I.eye : I.eyeOff; };
   ACT.xadd = t => { t.insertAdjacentHTML('beforebegin', xrow()); dirty = true; t.previousElementSibling.querySelector('.xl').focus(); };
   ACT.xdel = t => { t.closest('.xrow').remove(); dirty = true; };
@@ -391,7 +418,12 @@ function renderEdit(id) {
     if (!d.id) { d.id = uid(); d.created = now; }
     d.updated = now;
     t.disabled = true; t.textContent = 'Saving…';
-    try { await saveClient(d); toast('Saved'); go('detail', d.id); }
+    try {
+      await saveClient(d);
+      // A new client goes straight to choosing returns, with the usual ones already ticked.
+      if (!orig && suggestComp(d).size) { toast('Client added'); go('comp', { id: d.id, fresh: true }); }
+      else { toast('Saved'); go('detail', d.id); }
+    }
     catch (e) { t.disabled = false; t.textContent = orig ? 'Done' : 'Save'; if (e instanceof AuthError) return signOut(e.message); toast(errText(e)); }
   };
 }

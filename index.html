@@ -259,6 +259,31 @@ a.btn{display:block;text-decoration:none}
 .pp-sign{text-align:right;font-weight:600;margin-top:22px}
 .pp-sign span{display:block;font-weight:400;color:#6b6b72;margin-top:26px;font-size:11px}
 
+/* ---- first-run help: welcome, checklist, empty screens ---- */
+.welcome{padding-top:0}
+.welcome .lock-icon{margin:0 auto 4px;width:72px;height:72px;border-radius:20px}
+.welcome .lock-icon svg{width:36px;height:36px}
+.welcome p{max-width:340px;margin:0 auto;line-height:1.45}
+.guide{background:var(--card);border-radius:var(--r);margin:0 16px 22px;overflow:hidden;box-shadow:var(--shadow);animation:rise .45s var(--ease) both}
+.guide-h{display:flex;align-items:center;gap:10px;padding:14px 12px 8px 18px}
+.guide-h b{font-size:17px;flex:1}
+.guide-h span{font-size:13px;color:var(--sub)}
+.guide-h .bx{font-size:22px;line-height:1;color:var(--sub);padding:2px 6px}
+.guide-bar{height:4px;margin:0 18px 6px;border-radius:2px;background:var(--fill);overflow:hidden}
+.guide-bar i{display:block;height:100%;border-radius:2px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .4s var(--ease)}
+.guide .row{border-top:.5px solid var(--sep)}
+.guide .row.next .grow{font-weight:600}
+.guide .row .grow small{font-weight:400}
+.guide .row:disabled{opacity:1}
+.guide .row:disabled .grow{color:var(--sub);text-decoration:line-through;text-decoration-color:var(--ter)}
+.gcheck{width:24px;height:24px;border-radius:50%;flex:none;display:grid;place-items:center;box-shadow:inset 0 0 0 1.5px var(--ter);color:#fff}
+.gcheck.on{background:#34c759;box-shadow:none}
+.gcheck svg{width:15px;height:15px}
+.empty-actions{margin:20px auto 0;max-width:300px;text-align:center}
+.linkbtn.small{font-size:14px;padding:6px}
+.chev.open svg{transform:rotate(90deg)}
+.chev svg{transition:transform .25s var(--ease)}
+
 /* ---- tab bar (phone) / sidebar (wide screens) ---- */
 .tabs{display:none}
 body.unlocked:not(.in-form) .tabs{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:20;justify-content:space-around;padding:6px 8px calc(4px + env(safe-area-inset-bottom));background:var(--bg);background:color-mix(in srgb,var(--bg) 82%,transparent);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);border-top:.5px solid var(--sep)}
@@ -328,6 +353,7 @@ body.unlocked:not(.in-form) #toast{bottom:calc(76px + env(safe-area-inset-bottom
 <script src="js/practice.js"></script>
 <script src="js/invoice.js"></script>
 <script src="js/csv.js"></script>
+<script src="js/onboarding.js"></script>
 <script src="js/dashboard.js"></script>
 <script src="js/main.js"></script>
 </body>

@@ -67,7 +67,7 @@ function renderWelcome(a = {}) {
 function guideSteps() {
   const F = firmInfo(), first = S.clients[0];
   return [
-    { k: 'firm', t: 'Add your firm details', s: 'Name and address for invoices and messages', done: !!(F.name && F.address) },
+    { k: 'firm', t: 'Add your firm details', s: 'Name and address for invoices and messages', done: !!(F.name && firmHasAddress(F)) },
     { k: 'add', t: 'Add your first client', s: 'Or import your whole list from Excel', done: !!first },
     { k: 'track', t: 'Choose returns to track', s: 'The app then reminds you of every due date', done: S.clients.some(c => Object.keys(c.comp).length) },
     { k: 'fee', t: 'Record a fee', s: 'Then share the invoice as a PDF', done: S.clients.some(c => c.fees.length) },

@@ -4,7 +4,49 @@
 // Helvetica-Bold. Those fonts have no ₹ sign, so the PDF writes amounts as "Rs.".
 
 // ---------- firm details ----------
-const firmInfo = () => ({ invPrefix: 'INV', rcptPrefix: 'RCPT', terms: 'Thank you for your business.', ...S.meta.firmInfo, name: S.meta.firm || '' });
+const firmInfo = () => {
+  const F = { invPrefix: 'INV', rcptPrefix: 'RCPT', terms: 'Thank you for your business.', ...S.meta.firmInfo, name: S.meta.firm || '' };
+  return { ...splitOldFirm(F), ...F };
+};
+// Address and bank details are separate fields. Earlier versions kept each as one block of
+// text ("address", "bank"); this fills the separate fields from that text until it's saved again.
+const STATE_NAMES = [...new Set(Object.values(GST_STATES))].sort();
+function splitOldFirm(F) {
+  const o = {};
+  if (F.address && !F.addr1 && !F.city) {
+    let t = F.address.trim();
+    const pin = /\b([1-9]\d{2})\s?(\d{3})\b/.exec(t);
+    if (pin) { o.pin = pin[1] + pin[2]; t = t.slice(0, pin.index) + t.slice(pin.index + pin[0].length); }
+    let lines = t.split('\n').map(s => s.replace(/^[\s,\-–]+|[\s,\-–]+$/g, '')).filter(Boolean);
+    const st = STATE_NAMES.find(n => new RegExp(`(^|[\\s,])${n.replace(/[^\w\s]/g, '.')}$`, 'i').test(lines[lines.length - 1] || ''));
+    if (st) { o.state = st; lines[lines.length - 1] = lines[lines.length - 1].slice(0, -st.length).replace(/[\s,\-–]+$/, ''); lines = lines.filter(Boolean); }
+    if (lines.length === 1 && lines[0].includes(',')) { const parts = lines[0].split(','); o.city = parts.pop().trim(); lines = [parts.join(',').trim()]; }
+    else if (lines.length > 1) o.city = lines.pop();
+    o.addr1 = lines.shift() || ''; o.addr2 = lines.join(', ');
+  }
+  if (!F.state && !o.state && GSTIN_RE.test(F.gstin || '')) o.state = GST_STATES[F.gstin.slice(0, 2)] || '';
+  if (F.bank && !F.accNo && !F.bankName) {
+    const ifsc = /\b[A-Z]{4}0[A-Z0-9]{6}\b/i.exec(F.bank), acc = /\b\d{9,18}\b/.exec(F.bank);
+    if (ifsc) o.ifsc = ifsc[0].toUpperCase();
+    if (acc) o.accNo = acc[0];
+    const name = F.bank.split(/[\n·|,]/).map(s => s.trim()).find(s => s && !/\d/.test(s) && !/^(a\/?c|account|ifsc|branch)\b/i.test(s));
+    if (name) o.bankName = name.replace(/^bank\s*[:\-]\s*/i, '');
+  }
+  return o;
+}
+const firmHasAddress = F => !!(F.addr1 || F.city);
+function firmAddressLines(F) {
+  const cityLine = [F.city, F.pin].filter(Boolean).join(' - ') + (F.state ? (F.city || F.pin ? ', ' : '') + F.state : '');
+  return [F.addr1, F.addr2, cityLine].map(s => (s || '').trim()).filter(Boolean);
+}
+function firmBankLines(F) {
+  return [
+    [F.bankName, F.branch].filter(Boolean).join(', '),
+    F.accName && 'A/c name: ' + F.accName,
+    [F.accNo && 'A/c no. ' + F.accNo, F.ifsc && 'IFSC ' + F.ifsc].filter(Boolean).join(' · '),
+    F.upi && 'UPI: ' + F.upi,
+  ].filter(Boolean);
+}
 // The firm's logo: a JPEG (data URL) with its pixel size, made from the picture the user picked.
 // Kept as JPEG so the PDF can embed it as-is. Anything else (e.g. from an odd backup) is ignored.
 const LOGO_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/;
@@ -80,7 +122,7 @@ function docModel(c, e) {
   const F = firmInfo(), bill = e.kind === 'bill', amt = round2(e.amt);
   const firmGst = GSTIN_RE.test(F.gstin || '') ? F.gstin : '', gst = bill && F.gstOn && firmGst;
   const clientGst = c.gst.find(g => GSTIN_RE.test(g.gstin))?.gstin || '';
-  const firmLines = [...(F.address || '').split('\n'), [F.phone, F.email].filter(Boolean).join(' · '),
+  const firmLines = [...firmAddressLines(F), [F.phone, F.email].filter(Boolean).join(' · '),
     [F.pan && 'PAN ' + F.pan, firmGst && 'GSTIN ' + firmGst].filter(Boolean).join(' · ')].map(s => s.trim()).filter(Boolean);
   const toLines = [...(c.address || '').split('\n'), [c.pan && 'PAN ' + c.pan, clientGst && 'GSTIN ' + clientGst].filter(Boolean).join(' · ')]
     .map(s => s.trim()).filter(Boolean);
@@ -104,7 +146,7 @@ function docModel(c, e) {
     m.totals.push({ l: 'Total', amt, strong: true });
     const bal = balanceAfter(c, e);
     if (bal > amt) m.totals.push({ l: 'Total outstanding incl. this invoice', amt: bal });
-    const pay = [...(F.bank || '').split('\n'), F.upi && 'UPI: ' + F.upi].map(s => (s || '').trim()).filter(Boolean);
+    const pay = firmBankLines(F);
     if (pay.length) m.extra.push({ label: 'Payment details', lines: pay });
   } else {
     m.rows.push({ d: `Received towards ${e.desc || 'professional fees'}`, amt });
@@ -266,7 +308,7 @@ function renderDoc(a) {
   if (!e) return backTo();
   const bill = e.kind === 'bill', F = firmInfo(), m = docModel(c, e);
   let html = bar({ left: backBtn('Fees', 'back'), title: bill ? 'Invoice' : 'Receipt' });
-  if (!F.name || !F.address) html += `<button class="banner" data-act="firm"><span class="grow">Add your firm’s name and address so they appear on ${bill ? 'invoices' : 'receipts'}.</span><b class="bbtn">Set up</b></button>`;
+  if (!F.name || !firmHasAddress(F)) html += `<button class="banner" data-act="firm"><span class="grow">Add your firm’s name and address so they appear on ${bill ? 'invoices' : 'receipts'}.</span><b class="bbtn">Set up</b></button>`;
   html += `<div class="paper" aria-label="${esc(m.title)} preview">${paperHTML(m)}</div>`;
   html += `<div class="pad"><button class="btn primary" data-act="share">Share PDF</button></div>`;
   html += `<div class="group" style="margin-top:16px">
@@ -329,18 +371,24 @@ function renderFirm(a = {}) {
   const F = firmInfo();
   const fld = (k, label, ph, o = {}) => `<label class="frow"><span class="flabel">${esc(label)}</span>${o.area
     ? `<textarea class="finput" id="f_${k}" placeholder="${esc(ph)}">${esc(F[k] || '')}</textarea>`
-    : `<input class="finput${o.up ? ' up' : ''}" id="f_${k}" value="${esc(F[k] || '')}" placeholder="${esc(ph)}"${o.type ? ` type="${o.type}"` : ''}${o.up ? ' autocapitalize="characters"' : ''} autocomplete="off" autocorrect="off" spellcheck="false">`}</label>`;
+    : `<input class="finput${o.up ? ' up' : ''}${o.num ? ' mono' : ''}" id="f_${k}" value="${esc(F[k] || '')}" placeholder="${esc(ph)}"${o.type ? ` type="${o.type}"` : ''}${o.up ? ' autocapitalize="characters"' : ''}${o.num ? ` inputmode="numeric" maxlength="${o.num}"` : ''}${o.max ? ` maxlength="${o.max}"` : ''} autocomplete="off" autocorrect="off" spellcheck="false">`}</label>`;
   let html = bar({ left: `<button class="nav-btn" data-act="back">Cancel</button>`, title: 'Firm details', right: `<button class="nav-btn strong" data-act="save">Done</button>` });
   html += `<form id="ff" autocomplete="off"><div class="group-h">Your firm</div><div class="group">
     <div class="row logo-row"><span class="logo-box" id="logoBox"></span><span class="grow">Logo<small>PNG or JPG. Printed on invoices and receipts, and shown in the app.</small></span>
       <button type="button" class="linkbtn" data-act="logo" id="logoBtn"></button><button type="button" class="linkbtn danger" data-act="logoDel" id="logoDel" style="color:var(--danger)">Remove</button></div>
     ${fld('name', 'Firm name', 'e.g. Makwana & Associates')}
-    ${fld('address', 'Address', 'Office address with PIN code', { area: true })}
     ${fld('phone', 'Phone', 'Optional', { type: 'tel' })}
     ${fld('email', 'Email', 'Optional', { type: 'email' })}
     ${fld('pan', 'PAN', 'Optional', { up: true })}
     ${fld('gstin', 'GSTIN', 'If registered under GST', { up: true })}
     ${fld('signatory', 'Signatory', 'e.g. CA Harsh Makwana, Proprietor')}
+  </div>
+  <div class="group-h">Office address</div><div class="group">
+    ${fld('addr1', 'Address line 1', 'Office / building, street')}
+    ${fld('addr2', 'Address line 2', 'Area, landmark (optional)')}
+    ${fld('city', 'City', 'e.g. Ahmedabad')}
+    <label class="row"><span class="grow">State</span><select class="plain" id="f_state"><option value="">Choose</option>${STATE_NAMES.map(n => `<option${n === F.state ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+    ${fld('pin', 'PIN code', '6 digits', { num: 6 })}
   </div>
   <div class="group-h">GST on fees</div><div class="group">
     <div class="row"><span class="grow">Fees include GST at 18%<small>Invoices become tax invoices with CGST + SGST, or IGST for other states</small></span>${sw(F.gstOn, 'gston', ' aria-label="Fees include GST"')}</div>
@@ -348,8 +396,12 @@ function renderFirm(a = {}) {
   </div>
   <p class="foot">Needs your GSTIN above. The amount you enter for a bill is treated as the total including GST.</p>
   <div class="group-h">Payment details on invoices</div><div class="group">
-    ${fld('bank', 'Bank', 'Bank name, account no., IFSC', { area: true })}
-    ${fld('upi', 'UPI ID', 'e.g. firm@okhdfcbank')}
+    ${fld('accName', 'Account name', 'Name on the bank account')}
+    ${fld('bankName', 'Bank', 'e.g. HDFC Bank')}
+    ${fld('branch', 'Branch', 'e.g. Ashram Road (optional)')}
+    ${fld('accNo', 'Account no.', '9 to 18 digits', { num: 18 })}
+    ${fld('ifsc', 'IFSC', 'e.g. HDFC0000123', { up: true, max: 11 })}
+    ${fld('upi', 'UPI ID', 'e.g. firm@okhdfcbank (optional)')}
   </div>
   <div class="group-h">Numbering and notes</div><div class="group">
     ${fld('invPrefix', 'Invoice prefix', 'INV', { up: true })}
@@ -383,9 +435,17 @@ function renderFirm(a = {}) {
   ACT.gston = t => { gstOn = !gstOn; t.setAttribute('aria-checked', gstOn); };
   ACT.save = async b => {
     const v = k => $('#f_' + k).value.trim();
-    const info = { address: v('address'), phone: v('phone'), email: v('email'), pan: NORM.id(v('pan')), gstin: NORM.id(v('gstin')), signatory: v('signatory'),
-      gstOn, sac: v('sac'), bank: v('bank'), upi: v('upi'), invPrefix: NORM.id(v('invPrefix')).replace(/\//g, '') || 'INV',
+    const info = { phone: v('phone'), email: v('email'), pan: NORM.id(v('pan')), gstin: NORM.id(v('gstin')), signatory: v('signatory'),
+      addr1: v('addr1'), addr2: v('addr2'), city: v('city'), state: $('#f_state').value, pin: NORM.digits(v('pin')),
+      accName: v('accName'), bankName: v('bankName'), branch: v('branch'), accNo: NORM.digits(v('accNo')), ifsc: NORM.id(v('ifsc')), upi: v('upi').replace(/\s+/g, ''),
+      gstOn, sac: v('sac'), invPrefix: NORM.id(v('invPrefix')).replace(/\//g, '') || 'INV',
       rcptPrefix: NORM.id(v('rcptPrefix')).replace(/\//g, '') || 'RCPT', terms: v('terms'), ...(logo ? { logo } : {}) };
+    if (!info.state && GSTIN_RE.test(info.gstin)) info.state = GST_STATES[info.gstin.slice(0, 2)] || '';
+    const bad = (k, msg) => { toast(msg); $('#f_' + k).focus(); };
+    if (info.pin && !/^[1-9]\d{5}$/.test(info.pin)) return bad('pin', 'PIN code is 6 digits and doesn’t start with 0');
+    if (info.accNo && RULES.bankAcc(info.accNo)) return bad('accNo', RULES.bankAcc(info.accNo).msg);
+    if (info.ifsc && RULES.ifsc(info.ifsc)) return bad('ifsc', RULES.ifsc(info.ifsc).msg);
+    if (info.upi && !/^[\w.\-]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/.test(info.upi)) return bad('upi', 'UPI ID looks like name@bank');
     if (info.pan && !PAN_RE.test(info.pan)) return toast('PAN is 5 letters, 4 digits, 1 letter');
     if (info.gstin && (!GSTIN_RE.test(info.gstin) || gstinCheckDigit(info.gstin) !== info.gstin[14])) return toast('That GSTIN isn’t valid — check for a typo');
     if (gstOn && !info.gstin) return toast('Add your GSTIN to charge GST on invoices');

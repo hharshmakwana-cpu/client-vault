@@ -45,13 +45,13 @@ const avatar = (n, big) => `<div class="avatar${big ? ' big' : ''}" style="--h:$
 // Like iOS: a deeper screen slides in from the right over the previous one ("push") and slides
 // back out ("pop"); the edit screen rises as a sheet ("present") and drops away ("dismiss").
 // The outgoing screen is copied into a layer so both are visible while they move.
-const DEPTH = { list: 0, due: 0, dash: 0, settings: 0, detail: 2, bulk: 2, ext: 2, templates: 2, csvimport: 2, changepw: 2, import: 2, edit: 3, task: 3, comp: 3, fees: 3, wa: 4, login: 4, doc: 4, firm: 5, welcome: 2 };
+const DEPTH = { list: 0, due: 0, dash: 0, settings: 0, detail: 2, bulk: 2, ext: 2, templates: 2, csvimport: 2, changepw: 2, import: 2, edit: 3, task: 3, comp: 3, fees: 3, wa: 4, login: 4, doc: 4, firm: 5, welcome: 2, team: 2, erase: 2 };
 // Where "back" (and swipe-back) goes from each screen.
 const toDetailOr = (a, v, arg) => a.back === v ? { v, arg } : { v: 'detail', arg: a.id };
 const PARENT = {
   detail: () => ({ v: DETAIL_BACK }), due: () => ({ v: 'list' }), dash: () => ({ v: 'list' }), settings: () => ({ v: 'list' }),
   edit: id => id ? { v: 'detail', arg: id } : { v: 'list' }, comp: a => ({ v: 'detail', arg: a?.id ?? a }), fees: id => ({ v: 'detail', arg: id }),
-  task: a => a.back === 'detail' ? { v: 'detail', arg: a.id } : { v: 'due' }, bulk: () => ({ v: 'due' }), ext: a => ({ v: a?.back || 'due' }), doc: a => ({ v: 'fees', arg: a.id }), firm: a => a?.back ? { v: 'doc', arg: a.back } : { v: a?.from || 'settings' }, welcome: a => ({ v: a?.edit ? 'settings' : 'list' }),
+  task: a => a.back === 'detail' ? { v: 'detail', arg: a.id } : { v: 'due' }, bulk: () => ({ v: 'due' }), ext: a => ({ v: a?.back || 'due' }), doc: a => ({ v: 'fees', arg: a.id }), firm: a => a?.back ? { v: 'doc', arg: a.back } : { v: a?.from || 'settings' }, welcome: a => ({ v: a?.edit ? 'settings' : 'list' }), team: () => ({ v: 'settings' }), erase: () => ({ v: 'settings' }),
   wa: a => a.back === 'task' ? { v: 'task', arg: a.task } : toDetailOr(a, 'fees', a.id),
   login: a => a.back === 'task' ? { v: 'task', arg: a.task } : { v: 'detail', arg: a.id },
   changepw: () => ({ v: 'settings' }), import: () => ({ v: 'settings' }), templates: () => ({ v: 'settings' }), csvimport: () => ({ v: 'settings' }),
@@ -121,7 +121,7 @@ function go(v, arg, keepScroll) {
   cur = { v, arg }; ACT = {};
   ({ list: renderList, detail: renderDetail, edit: renderEdit, settings: renderSettings, changepw: renderChangePw, import: renderImport,
     due: renderDue, task: renderTask, comp: renderComp, fees: renderFees, wa: renderWa, bulk: renderBulk, login: renderLogin,
-    templates: renderTemplates, csvimport: renderCsvImport, dash: renderDash, ext: renderExt, doc: renderDoc, firm: renderFirm, welcome: renderWelcome })[v](arg);
+    templates: renderTemplates, csvimport: renderCsvImport, dash: renderDash, ext: renderExt, doc: renderDoc, firm: renderFirm, welcome: renderWelcome, team: renderTeam, erase: renderErase })[v](arg);
   if (!keepScroll) scrollTo(0, 0);
   // Switching between tabs cross-fades instead of sliding.
   const fade = !mode && live && !keepScroll && !skipAnim && from !== v && TABS.has(from) && TABS.has(v) && !reduceMotion();
@@ -209,7 +209,7 @@ function endSwipe() {
 // The four main screens. On a phone they sit in a bar at the bottom; from 900px wide they become
 // a sidebar. The bar hides on forms (anything with Cancel / Done), so a half-filled form isn't left by accident.
 const TABS = new Set(['list', 'due', 'dash', 'settings']);
-const FORMS = new Set(['edit', 'comp', 'templates', 'firm', 'changepw', 'import', 'csvimport', 'task', 'welcome']);
+const FORMS = new Set(['edit', 'comp', 'templates', 'firm', 'changepw', 'import', 'csvimport', 'task', 'welcome', 'erase']);
 let TAB = 'list';
 const tabsEl = $('#tabs');
 function updateTabs() {

@@ -11,5 +11,10 @@ if (!window.isSecureContext || !crypto.subtle) {
   bioAvailable().then(ok_ => { BIO_OK = ok_; if (S && cur.v === 'list') renderList(); });
   const qs = new URLSearchParams(location.search);
   if (qs.get('mode') === 'resetPassword' && qs.get('oobCode')) renderReset(qs.get('oobCode'));
+  else if (qs.get('mode') === 'verifyEmail' && qs.get('oobCode') && !DB.demo) {
+    // Opened from the verification email: confirm it, then carry on.
+    history.replaceState(null, '', location.pathname);
+    DB.applyVerify(qs.get('oobCode')).then(() => toast('Email verified'), e => toast(e.message)).finally(openVault);
+  }
   else openVault();
 }

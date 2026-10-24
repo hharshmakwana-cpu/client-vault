@@ -13,6 +13,7 @@ function renderSettings() {
       <button class="row" data-act="firm">${logoOf() ? `<span class="logo-box has">${logoImg(logoOf(), 'logo-thumb')}</span>` : ''}<span class="grow">Firm details<small>Name, address, GST and bank details for invoices</small></span><span class="chev">${I.chev}</span></button>
       <button class="row" data-act="work"><span class="grow">Work you handle<small>${esc(SERVICES.filter(x => handles(x[0])).map(x => x[1]).join(', '))}</small></span><span class="chev">${I.chev}</span></button>
       <button class="row" data-act="templates"><span class="grow">WhatsApp messages</span><span class="chev">${I.chev}</span></button>
+      ${isOwner() ? `<button class="row" data-act="team"><span class="grow">Team access<small>Approve people who sign up</small></span><span class="chev">${I.chev}</span></button>` : ''}
     </div>
     <div class="group-h">Security</div>
     <div class="group">
@@ -56,7 +57,14 @@ function renderSettings() {
       <div class="row"><span class="grow">${DB.demo ? 'Mode' : 'Signed in as'}</span><span class="val">${esc(DB.user.email)}</span></div>
       ${DB.demo ? '' : `<button class="row link" data-act="signout">Sign out of this device</button>`}
     </div>
-    <p class="foot center" style="margin-top:-12px">${plural(S.clients.length, 'client')} · End-to-end encrypted</p>
+    <div class="group-h">Delete</div>
+    <div class="group">
+      <button class="row link danger-link" data-act="erase">Erase all data and start fresh</button>
+      ${DB.demo ? '' : isOwner() ? `<div class="row"><span class="grow muted">Delete my account<small>Not available for the owner account — it’s the one that approves everyone else.</small></span></div>`
+        : `<button class="row link danger-link" data-act="delacct">Delete my account</button>`}
+    </div>
+    <p class="foot">Both ask for your master password and can’t be undone.</p>
+    <p class="foot center" style="margin-top:4px">${plural(S.clients.length, 'client')} · End-to-end encrypted</p>
     <input type="file" id="file" accept=".json,application/json" hidden>`;
 
   $('#lockAfter').onchange = e => { settings.lockAfter = +e.target.value; saveSettings(); toast('Auto-lock updated'); };
@@ -97,6 +105,9 @@ function renderSettings() {
   ACT.work = () => go('welcome', { edit: true });
   ACT.guide = () => { settings.guideHidden = false; saveSettings(); go('list'); };
   ACT.templates = () => go('templates');
+  ACT.team = () => { if (needOnline()) go('team'); };
+  ACT.erase = () => go('erase');
+  ACT.delacct = () => go('erase', { account: true });
   ACT.firm = () => go('firm');
   ACT.ext = () => go('ext', { back: 'settings' });
   ACT.csvout = () => exportClientsCSV();

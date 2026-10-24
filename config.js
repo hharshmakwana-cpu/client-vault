@@ -4,5 +4,7 @@
 // These two values are not secret — Firebase web keys are meant to be public.
 window.CLIENT_VAULT_CONFIG = {
   apiKey: "AIzaSyDGBkKMMHIRHmQtaS922_MGy8i1s96Gfw8",
-  projectId: "client-vault-4932a"
+  projectId: "client-vault-4932a",
+  // The account that approves new people (also named in firebase/firestore.rules).
+  ownerUid: "hYa1oo6qKPM3DufxJK76YXExo6l2"
 };

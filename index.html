@@ -302,6 +302,13 @@ a.btn{display:block;text-decoration:none}
 @media (min-width:900px){.mini-brand{display:none}}
 #brandName{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;font-size:17px}
 
+/* ---- sign-up, delete ---- */
+.signup-link{margin-top:10px}
+.signup-link .linkbtn{font-size:13px}
+.danger-link{color:var(--danger)!important}
+.btn.danger-btn{background:var(--danger);color:#fff;box-shadow:0 8px 20px rgba(229,53,43,.22)}
+.lock .sub b{color:var(--text);font-weight:600}
+
 /* ---- tab bar (phone) / sidebar (wide screens) ---- */
 .tabs{display:none}
 body.unlocked:not(.in-form) .tabs{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:20;justify-content:space-around;padding:6px 8px calc(4px + env(safe-area-inset-bottom));background:var(--bg);background:color-mix(in srgb,var(--bg) 82%,transparent);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);border-top:.5px solid var(--sep)}
@@ -372,6 +379,7 @@ body.unlocked:not(.in-form) #toast{bottom:calc(76px + env(safe-area-inset-bottom
 <script src="js/invoice.js"></script>
 <script src="js/csv.js"></script>
 <script src="js/onboarding.js"></script>
+<script src="js/account.js"></script>
 <script src="js/dashboard.js"></script>
 <script src="js/main.js"></script>
 </body>

@@ -1,0 +1,36 @@
+rules_version = '2';
+// Client Vault — Firestore security rules.
+// Everything a user stores is already encrypted in the browser; these rules decide who may
+// store anything at all. The owner approves people by email; an approved person (with a
+// verified email) gets their own private vault under /users/{their uid}. Nobody can read
+// another person's vault, and only the owner can approve.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isOwner() { return signedIn() && request.auth.uid == 'hYa1oo6qKPM3DufxJK76YXExo6l2'; }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function verified() { return signedIn() && request.auth.token.email_verified == true; }
+    function approved() { return verified() && exists(/databases/$(database)/documents/approved/$(myEmail())); }
+
+    // Each person's own vault: the vault document and their clients.
+    match /users/{uid}/{document=**} {
+      allow read, write: if signedIn() && request.auth.uid == uid && (isOwner() || approved());
+    }
+
+    // Emails the owner has approved. A person may check their own entry.
+    match /approved/{email} {
+      allow read: if isOwner() || (verified() && myEmail() == email);
+      allow write: if isOwner();
+    }
+
+    // Requests for access, one per email, made by that (verified) person; the owner reviews them.
+    match /requests/{email} {
+      allow read: if isOwner() || (verified() && myEmail() == email);
+      allow create: if verified() && myEmail() == email
+        && request.resource.data.keys().hasOnly(['name', 'at'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 80
+        && request.resource.data.at is int;
+      allow delete: if isOwner() || (verified() && myEmail() == email);
+    }
+  }
+}

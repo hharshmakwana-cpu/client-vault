@@ -26,7 +26,9 @@ function renderSignIn(msg) {
       <button class="btn plainbtn" type="button" data-act="forgot">Forgot password?</button>
       <p class="err" id="err" role="alert">${esc(msg || '')}</p>
       <p class="hint center" id="hint" aria-live="polite"></p>
+      ${DB.demo ? '' : `<p class="hint center signup-link">New here? <button type="button" class="linkbtn" data-act="signup">Create an account</button></p>`}
     </form>`);
+  ACT.signup = () => renderSignUp();
   $('#f').onsubmit = async e => {
     e.preventDefault();
     const btn = $('#go'), email = $('#em').value.trim();
@@ -95,6 +97,7 @@ async function openVault() {
   try { vault = await DB.getVault(); }
   catch (e) {
     if (e instanceof AuthError) return signOut(e.message);
+    if (e instanceof AccessError) return renderAccess();
     const c = await store.get(cacheKey()).catch(() => null);
     if (!c) return renderError(isNet(e) ? 'No internet connection, and this device has no saved copy yet.' : e.message, openVault);
     vault = c.vault; offline = true;
@@ -102,6 +105,68 @@ async function openVault() {
   if (!vault || !vault.wkey) return renderCreate();
   PV = { vault, offline };
   renderUnlock();
+}
+
+// ---------- new accounts: sign up, verify email, wait for approval ----------
+function renderSignUp() {
+  lockScreen('Create an account', 'Your own private, encrypted vault. The app owner approves new accounts before they can be used.', `
+    <form id="f" class="stack" autocomplete="on">
+      <input class="field" id="nm" placeholder="Your name or firm name" autocomplete="name" maxlength="80" required>
+      <input class="field" id="em" type="email" placeholder="Email" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+      <input class="field" id="p1" type="password" placeholder="Choose a sign-in password" autocomplete="new-password" required>
+      <input class="field" id="p2" type="password" placeholder="Confirm password" autocomplete="new-password" required>
+      <button class="btn primary" id="go" type="submit">Create account</button>
+      <button class="btn plainbtn" type="button" data-act="signin">I already have an account</button>
+      <p class="err" id="err" role="alert"></p>
+      <p class="hint">After this you’ll verify your email, then the owner approves you. Later you’ll also create a master password that encrypts your data.</p>
+    </form>`);
+  ACT.signin = () => renderSignIn();
+  $('#f').onsubmit = async e => {
+    e.preventDefault();
+    const er = $('#err'), btn = $('#go'), name = $('#nm').value.trim(), email = $('#em').value.trim(), a = $('#p1').value;
+    if (name.length < 2) return (er.textContent = 'Enter your name.');
+    if (RULES.email(email)) return (er.textContent = 'Enter a valid email address.');
+    if (a.length < 8) return (er.textContent = 'Use at least 8 characters for the password.');
+    if (a !== $('#p2').value) return (er.textContent = 'Passwords don’t match.');
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try { await DB.signUp(name, email, a); writeLS('cv-email', email); renderAccess(); }
+    catch (ex) { btn.disabled = false; btn.textContent = 'Create account'; er.textContent = isNet(ex) ? 'No internet connection.' : ex.message; }
+  };
+}
+// Signed in but can't open a vault yet: first the email must be verified, then the owner approves.
+async function renderAccess(retried) {
+  renderLoading('Checking your account…');
+  let u, approved = false;
+  try {
+    u = await DB.checkUser();
+    if (u.verified) approved = await DB.myApproval();
+  } catch (e) {
+    if (e instanceof AuthError) return signOut(e.message);
+    return renderError(isNet(e) ? 'No internet connection.' : e.message, () => renderAccess());
+  }
+  if (approved && !retried) return openVaultAfterApproval();
+  const email = esc(DB.user.email), leave = `<button class="btn plainbtn" type="button" data-act="out">Sign out</button>`;
+  if (!u.verified) {
+    lockScreen('Verify your email', `We sent a link to <b>${email}</b>. Open it, then come back here. Check your spam folder too.`, `
+      <div class="stack"><button class="btn primary" data-act="again">I’ve verified — continue</button>
+      <button class="btn plainbtn" data-act="resend">Send the link again</button>${leave}<p class="err" id="err" role="alert"></p></div>`);
+    ACT.resend = async b => {
+      b.disabled = true;
+      try { await DB.sendVerify(); toast('Link sent'); setTimeout(() => { if (document.body.contains(b)) b.disabled = false; }, 30000); }
+      catch (e) { b.disabled = false; $('#err').textContent = e.message; }
+    };
+  } else {
+    try { await DB.requestAccess(u.name || DB.user.email); } catch {}
+    lockScreen('Waiting for approval', `Your email is verified. The app owner has been asked to approve <b>${email}</b>. You can use the app as soon as they do.`, `
+      <div class="stack"><button class="btn primary" data-act="again">Check again</button>${leave}</div>`);
+  }
+  ACT.again = () => renderAccess();
+  ACT.out = () => signOut(); // a pending request stays, so the owner can still approve it
+}
+// Approved, but the vault request may still carry an old sign-in token: refresh and try once more.
+async function openVaultAfterApproval() {
+  try { await DB.getVault(); openVault(); }
+  catch (e) { if (e instanceof AccessError) return renderAccess(true); openVault(); }
 }
 
 function renderCreate() {

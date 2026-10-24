@@ -17,7 +17,7 @@ function renderDue() {
     html += `<div class="group-h">Filed in the last 60 days</div><div class="group">${list.map(t => taskRow(t)).join('')}</div>`;
   } else {
     const wk = addDays(L.today, 7);
-    const groups = [['Overdue', t => t.due < L.today], ['Today', t => t.due === L.today], ['This week', t => t.due > L.today && t.due <= wk], ['Later this month', t => t.due > wk]];
+    const groups = [['Overdue', t => t.due < L.today], ['Today', t => t.due === L.today], ['This week', t => t.due > L.today && t.due <= wk], ['Next 30 days', t => t.due > wk]];
     for (const [h, f] of groups) { const g = list.filter(f); if (g.length) html += `<div class="group-h">${h}</div><div class="group">${g.map(t => taskRow(t)).join('')}</div>`; }
   }
   const nExt = Object.keys(S.meta.ext || {}).length;
@@ -97,7 +97,7 @@ function renderTask(a) {
   let st = t.status;
   const n = daysBetween(today, t.due);
   const when = DONE.has(st) ? 'Filed' : n < 0 ? `${-n} day${n === -1 ? '' : 's'} overdue` : n === 0 ? 'Due today' : `Due in ${n} day${n === 1 ? '' : 's'}`;
-  let html = bar({ left: backBtn(a.back === 'detail' ? c.name.split(' ')[0] : 'Due dates', 'back'), title: t.title, right: `<button class="nav-btn strong" data-act="save">Done</button>` });
+  let html = bar({ left: backBtn(a.back === 'detail' ? c.name : 'Due dates', 'back'), title: t.title, right: `<button class="nav-btn strong" data-act="save">Done</button>` });
   html += `<div class="hero task-hero"><p class="eyebrow">${esc(t.period)}</p><h2 data-big>${esc(t.title)}</h2><p>${esc(c.name)}</p>
     <span class="duechip big ${DONE.has(st) ? 'okc' : n < 0 ? 'late' : n <= 7 ? 'soon' : ''}">${when} · ${fmtDate(t.due)}</span></div>`;
   html += `<div class="seg" role="radiogroup" aria-label="Status">${STATUS.map(([k, l]) => `<button role="radio" aria-checked="${st === k}" class="${st === k ? 'on' : ''}" data-act="st" data-s="${k}">${l}</button>`).join('')}</div>`;
@@ -105,7 +105,7 @@ function renderTask(a) {
     <label class="frow" id="onRow"${DONE.has(st) ? '' : ' hidden'}><span class="flabel">Filed on</span><input class="finput" type="date" id="on" value="${esc(w.on || today)}" max="${today}"></label>
     <label class="frow"><span class="flabel">Ack / ARN</span><input class="finput mono" id="ack" value="${esc(w.ack || '')}" placeholder="Acknowledgement number" autocapitalize="characters" autocorrect="off" spellcheck="false"></label>
     <label class="frow"><span class="flabel">Due date</span><input class="finput" type="date" id="due" value="${esc(t.due)}"></label>
-    ${w.bill ? '' : `<label class="frow"><span class="flabel">Fee (₹)</span><input class="finput" id="fee" inputmode="decimal" placeholder="Optional — adds a bill"></label>`}
+    ${w.bill ? '' : `<label class="frow"><span class="flabel">Fee (₹)</span><input class="finput" id="fee" inputmode="decimal" placeholder="Optional — adds an invoice"></label>`}
     <label class="frow bare"><textarea class="finput" id="note" placeholder="Notes for this filing">${esc(w.note || '')}</textarea></label>
   </div></form>`;
   const notes = [];
@@ -130,21 +130,23 @@ function renderTask(a) {
   ACT.remind = () => go('wa', { id: c.id, key: t.key, back: 'task', task: a, pick: DONE.has(st) ? 'filed' : 'due' });
   ACT.client = () => go('detail', c.id);
   ACT.save = async b => {
-    const fee = parseFloat(($('#fee')?.value || '').replace(/[,\s₹]/g, ''));
-    if ($('#fee')?.value.trim() && !(fee > 0)) return toast('Enter the fee as a number');
+    const feeText = $('#fee')?.value.trim() || '', fee = feeText ? parseAmount(feeText) : 0;
+    if (feeText && !(fee > 0)) { toast('Enter the fee as an amount, e.g. 2500 or 2,500.50'); return $('#fee').focus(); }
     const due = $('#due').value || t.std;
     const nw = { s: st, ack: $('#ack').value.trim().toUpperCase(), note: $('#note').value.trim() };
     if (DONE.has(st)) nw.on = $('#on').value || today;
     if (due !== t.std) nw.due = due;
     if (w.bill) nw.bill = w.bill;
     b.disabled = true;
+    let newNo = '';
     try {
       await updateClient(c, d => {
-        if (fee > 0) { const date = nw.on || today, e = { id: uid(), date, kind: 'bill', amt: fee, desc: `${t.title} · ${t.period}`, no: nextNo('bill', date) }; d.fees.push(e); nw.bill = e.id; }
+        if (fee > 0) { const date = nw.on || today, e = { id: uid(), date, kind: 'bill', amt: fee, desc: `${t.title} · ${t.period}`, no: nextNo('bill', date) }; d.fees.push(e); nw.bill = e.id; newNo = e.no; }
         for (const k of Object.keys(nw)) if (nw[k] === '' || nw[k] == null) delete nw[k];
         d.work[t.key] = nw;
       });
-      toast('Saved'); backTo();
+      if (newNo) await noteNo(newNo);
+      toast(newNo ? `Saved · invoice ${newNo} added` : 'Saved'); backTo();
     } catch (e) { b.disabled = false; toast(errText(e)); }
   };
 }
@@ -195,9 +197,9 @@ function renderFees(id) {
   if (!c) return go('list');
   const f = feeTotals(c), today = todayStr();
   let kind = 'bill';
-  let html = bar({ left: backBtn(c.name.split(' ')[0], 'back'), title: 'Fees' });
+  let html = bar({ left: backBtn(c.name, 'back'), title: 'Fees' });
   html += `<div class="tiles"><div class="tile"><b>${inr(f.billed)}</b><span>Billed</span></div><div class="tile"><b>${inr(f.received)}</b><span>Received</span></div><div class="tile ${f.due > 0 ? 'red' : 'green'}"><b>${inr(f.due)}</b><span>Outstanding</span></div></div>`;
-  html += `<div class="seg" role="radiogroup" aria-label="Entry type"><button class="on" role="radio" aria-checked="true" data-act="kind" data-k="bill">Bill</button><button role="radio" aria-checked="false" data-act="kind" data-k="rcpt">Payment received</button></div>`;
+  html += `<div class="seg" role="radiogroup" aria-label="Entry type"><button class="on" role="radio" aria-checked="true" data-act="kind" data-k="bill">Invoice</button><button role="radio" aria-checked="false" data-act="kind" data-k="rcpt">Payment received</button></div>`;
   html += `<form id="ff" autocomplete="off"><div class="group">
     <label class="frow"><span class="flabel">Amount (₹)</span><input class="finput" id="amt" inputmode="decimal" placeholder="0"></label>
     <label class="frow"><span class="flabel">Date</span><input class="finput" type="date" id="fdate" value="${today}" max="${today}"></label>
@@ -207,8 +209,8 @@ function renderFees(id) {
     <button type="button" class="row link" data-act="fadd" style="justify-content:center;font-weight:600">Add entry</button>
   </div></form>`;
   const entries = [...c.fees].sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
-  html += entries.length ? `<div class="group-h">Ledger</div><div class="group">${entries.map(e => `<button class="row" data-act="doc" data-i="${esc(e.id)}"><span class="grow">${esc(e.desc || (e.kind === 'bill' ? 'Professional fees' : 'Payment received'))}<small>${fmtDate(e.date)} · ${e.kind === 'bill' ? 'Bill' : 'Payment'}${e.no ? ' · ' + esc(e.no) : ''}${e.mode ? ' · ' + esc(e.mode) : ''}</small></span><span class="amt${e.kind === 'bill' ? '' : ' in'}">${e.kind === 'bill' ? '' : '−'}${inr(e.amt)}</span><span class="chev">${I.chev}</span></button>`).join('')}</div>
-    <p class="foot">Tap an entry for its invoice or receipt — share it as a PDF, or delete the entry.</p>` : `<div class="empty"><b>No entries yet</b>Add a bill when you agree a fee, and a payment when it’s received.</div>`;
+  html += entries.length ? `<div class="group-h">Ledger</div><div class="group">${entries.map(e => `<button class="row" data-act="doc" data-i="${esc(e.id)}"><span class="grow">${esc(e.desc || (e.kind === 'bill' ? 'Professional fees' : 'Payment received'))}<small>${fmtDate(e.date)} · ${e.kind === 'bill' ? 'Invoice' : 'Payment'}${e.no ? ' · ' + esc(e.no) : ''}${e.mode ? ' · ' + esc(e.mode) : ''}</small></span><span class="amt${e.kind === 'bill' ? '' : ' in'}">${e.kind === 'bill' ? '' : '−'}${inr(e.amt)}</span><span class="chev">${I.chev}</span></button>`).join('')}</div>
+    <p class="foot">Tap an entry for its invoice or receipt — share it as a PDF, or delete the entry.</p>` : `<div class="empty"><b>No entries yet</b>Add an invoice when you agree a fee, and a payment when it’s received.</div>`;
   if (f.due > 0) html += `<div class="group"><button class="row link" data-act="remindfee">Send fees reminder on WhatsApp</button></div>`;
   app.innerHTML = html;
   $('#ff').onsubmit = e => e.preventDefault();
@@ -219,8 +221,8 @@ function renderFees(id) {
     $$('[data-rcpt]', app).forEach(r => { r.hidden = kind !== 'rcpt'; });
   };
   ACT.fadd = async b => {
-    const amt = parseFloat($('#amt').value.replace(/[,\s₹]/g, ''));
-    if (!(amt > 0)) { toast('Enter an amount'); return $('#amt').focus(); }
+    const amt = parseAmount($('#amt').value);
+    if (!(amt > 0)) { toast('Enter the amount, e.g. 2500 or 2,500.50'); return $('#amt').focus(); }
     const date = $('#fdate').value || today;
     if (date > today) return toast('The date can’t be in the future');
     b.disabled = true;
@@ -228,7 +230,8 @@ function renderFees(id) {
       const e = { id: uid(), date, kind, amt, desc: $('#fdesc').value.trim(), no: nextNo(kind, date) };
       if (kind === 'rcpt') { if ($('#fmode').value) e.mode = $('#fmode').value; if ($('#fref').value.trim()) e.ref = $('#fref').value.trim(); }
       await updateClient(c, d => d.fees.push(e));
-      toast(`${kind === 'bill' ? 'Bill' : 'Payment'} ${e.no} added`); go('fees', id, true);
+      await noteNo(e.no);
+      toast(`${kind === 'bill' ? 'Invoice' : 'Receipt'} ${e.no} added`); go('fees', id, true);
     } catch (e) { b.disabled = false; toast(errText(e)); }
   };
   ACT.doc = b => go('doc', { id, e: b.dataset.i });
@@ -309,18 +312,22 @@ function renderTemplates() {
     <label class="frow"><span class="flabel">Name</span><input class="finput" data-f="name" value="${esc(x.name)}"></label>
     <label class="frow bare"><textarea class="finput" data-f="text" rows="4">${esc(x.text)}</textarea></label></div></div>`;
   let html = bar({ left: `<button class="nav-btn" data-act="back">Cancel</button>`, title: 'WhatsApp messages', right: `<button class="nav-btn strong" data-act="save">Done</button>` });
-  html += `<div class="group-h">Signature</div><div class="group"><label class="frow"><span class="flabel">Firm name</span><input class="finput" id="firm" value="${esc(S.meta.firm || '')}" placeholder="e.g. Harshad Makwana & Co."></label></div>`;
-  html += `<p class="foot">Used for {firm} at the end of each message.</p>`;
+  html += `<div class="group-h">Signature</div><div class="group"><button class="row" data-act="firmd"><span class="grow">${S.meta.firm ? esc(S.meta.firm) : '<span class="muted">Not set yet</span>'}<small>Used for {firm} at the end of each message — change it in Firm details</small></span><span class="chev">${I.chev}</span></button></div>`;
   html += `<div id="tl">${list.map(block).join('')}</div><div class="group"><button class="row addrow" data-act="tadd"><span class="plus">+</span>Add message</button></div>`;
   html += `<p class="foot">Words in curly brackets are filled in for each client: ${TPL_TAGS.map(t => `{${t}}`).join(' ')}</p>`;
   app.innerHTML = html;
   ACT.back = backTo;
   ACT.tadd = () => { $('#tl').insertAdjacentHTML('beforeend', block({ id: uid(), name: 'New message', text: 'Dear {name}, ' })); $('#tl [data-tpl]:last-child textarea').focus(); };
-  ACT.tdel = b => { if (confirm('Remove this message?')) b.closest('[data-tpl]').remove(); };
+  ACT.tdel = b => {
+    if ($$('[data-tpl]', app).length < 2) return toast('Keep at least one message');
+    if (confirm('Remove this message?')) b.closest('[data-tpl]').remove();
+  };
+  ACT.firmd = () => go('firm', { from: 'templates' });
   ACT.save = async b => {
     const out = $$('[data-tpl]', app).map(el => ({ id: el.dataset.tpl, name: $('[data-f="name"]', el).value.trim() || 'Message', text: $('[data-f="text"]', el).value.trim() })).filter(x => x.text);
-    const prev = { templates: S.meta.templates, firm: S.meta.firm };
-    S.meta.templates = out; S.meta.firm = $('#firm').value.trim();
+    if (!out.length) return toast('Keep at least one message with some text');
+    const prev = { templates: S.meta.templates };
+    S.meta.templates = out;
     b.disabled = true;
     try { await saveMeta(); toast('Saved'); backTo(); }
     catch (e) { Object.assign(S.meta, prev); b.disabled = false; toast(errText(e)); }

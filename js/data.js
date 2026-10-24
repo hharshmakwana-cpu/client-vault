@@ -11,6 +11,11 @@ const PAN_TO_TYPE = { P: 'Individual', H: 'HUF', F: 'Partnership Firm', C: 'Comp
 const PERSONAL = new Set(['Individual', 'HUF']);
 const REG_LABEL = { Company: 'CIN', LLP: 'LLPIN', 'Partnership Firm': 'Firm reg. no.', Trust: 'Registration no.', AOP: 'Registration no.', BOI: 'Registration no.' };
 const GST_STATES = { '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh', '05': 'Uttarakhand', '06': 'Haryana', '07': 'Delhi', '08': 'Rajasthan', '09': 'Uttar Pradesh', '10': 'Bihar', '11': 'Sikkim', '12': 'Arunachal Pradesh', '13': 'Nagaland', '14': 'Manipur', '15': 'Mizoram', '16': 'Tripura', '17': 'Meghalaya', '18': 'Assam', '19': 'West Bengal', '20': 'Jharkhand', '21': 'Odisha', '22': 'Chhattisgarh', '23': 'Madhya Pradesh', '24': 'Gujarat', '25': 'Daman & Diu', '26': 'Dadra & Nagar Haveli and Daman & Diu', '27': 'Maharashtra', '28': 'Andhra Pradesh (old)', '29': 'Karnataka', '30': 'Goa', '31': 'Lakshadweep', '32': 'Kerala', '33': 'Tamil Nadu', '34': 'Puducherry', '35': 'Andaman & Nicobar Islands', '36': 'Telangana', '37': 'Andhra Pradesh', '38': 'Ladakh', '97': 'Other Territory', '99': 'Centre Jurisdiction' };
+// States and UTs to pick from (current GST codes only), and each one's GST state code.
+const STATE_CODE = Object.fromEntries(Object.entries(GST_STATES).filter(([k]) => !['25', '28', '97', '99'].includes(k)).map(([k, v]) => [v, k]));
+const STATES = Object.keys(STATE_CODE).sort();
+// The state named in a free-text address, if any (longest names first, so "Andhra Pradesh" isn't read as "Pradesh").
+const stateInText = t => [...STATES].sort((a, b) => b.length - a.length).find(n => new RegExp(`(^|[^a-z])${n.replace(/[^\w\s]/g, '.')}([^a-z]|$)`, 'i').test(t || '')) || '';
 const STATE2 = new Set('AN AP AR AS BR CH CG CT DD DL DN GA GJ HP HR JH JK KA KL LA LD MH ML MN MP MZ NL OD OR PB PY RJ SK TG TN TR TS UK UP UR UT WB'.split(' '));
 const CIN_CLASS = { PLC: 'Public company', PTC: 'Private company', OPC: 'One person company', NPL: 'Section 8 company', GOI: 'Central Govt. company', SGC: 'State Govt. company', FLC: 'Foreign subsidiary (public)', FTC: 'Foreign subsidiary (private)', GAP: 'Guarantee company (public)', GAT: 'Guarantee company (private)', ULL: 'Unlimited company (public)', ULT: 'Unlimited company (private)' };
 
@@ -27,6 +32,7 @@ const SECTIONS = [
     { k: 'email', label: 'Email', input: 'email', rule: 'email', norm: 'lower', link: 'mailto:' },
     { k: 'dob', label: dobLabel, input: 'date', rule: 'dob' },
     { k: 'address', label: addrLabel, kind: 'textarea', rule: 'address', ph: 'Address with 6-digit PIN code' },
+    { k: 'state', label: 'State', kind: 'state' },
   ] },
   { title: 'Identity', fields: [
     { k: 'pan', label: 'PAN', up: true, max: 10, rule: 'pan', norm: 'id', ph: 'ABCPE1234F' },
@@ -73,7 +79,18 @@ function normMobile(v) {
   return d;
 }
 const PAN_RE = /^[A-Z]{5}\d{4}[A-Z]$/;
-const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+// GSTIN: state code + PAN + entity no. + Z (normal) or C (e-commerce operator collecting TCS) + check
+// character; or state code + TAN + entity no. + D + check for a TDS deductor registration.
+const GSTIN_RE = /^\d{2}(?:[A-Z]{5}\d{4}[A-Z][1-9A-Z][ZC]|[A-Z]{4}\d{5}[A-Z][1-9A-Z]D)[0-9A-Z]$/;
+const gstinPan = g => GSTIN_RE.test(g || '') && g[13] !== 'D' ? g.slice(2, 12) : '';
+// Master password: long, or a little shorter with a mix of letters, numbers and symbols.
+function pwWeak(p) {
+  if (p.length < 10) return 'Use at least 10 characters.';
+  const kinds = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter(r => r.test(p)).length;
+  if (/^(.)\1+$/.test(p) || /^(?:0123456789|1234567890|password|qwerty)/i.test(p)) return 'That password is too easy to guess.';
+  if (p.length < 14 && kinds < 3) return 'Mix capital and small letters, numbers or symbols — or use 14+ characters.';
+  return '';
+}
 const initialsOf = s => (s || '').toUpperCase().replace(/[^A-Z\s]/g, ' ').split(/\s+/).filter(Boolean).map(w => w[0]);
 const others = c => S.clients.filter(x => x.id !== c.self);
 const aadhaarDigits = v => (v || '').replace(/\D/g, '');
@@ -147,16 +164,22 @@ const RULES = {
     const st = GST_STATES[v.slice(0, 2)];
     if (!st) return err(`${v.slice(0, 2)} isn’t a valid GST state code`);
     if (gstinCheckDigit(v) !== v[14]) return err('Last character (check digit) is wrong — check for a typo');
+    if (c.gstins.filter(g => g === v).length > 1) return err('This GSTIN is entered twice');
+    if (v[13] === 'D') { // TDS deductor registration: built on the TAN
+      const tan = v.slice(2, 12);
+      if (c.tan && tan !== c.tan) return err(`This GSTIN is for TAN ${tan}, not ${c.tan}`);
+      const dup = others(c).find(x => (x.gst || []).some(g => g.gstin === v));
+      return dup ? err(`This GSTIN is already saved for ${dup.name}`) : ok(`${st} · TDS deductor registration`);
+    }
     const inner = v.slice(2, 12);
     if (PAN_RE.test(c.pan) && inner !== c.pan) return err(`This GSTIN is for PAN ${inner}, not ${c.pan}`);
     if (!PAN_RE.test(c.pan)) {
       if (!PAN_STATUS[inner[3]]) return err('The PAN inside this GSTIN isn’t valid');
       if (TYPE_PAN[c.type] && TYPE_PAN[c.type] !== inner[3]) return err(`This GSTIN is for ${PAN_STATUS[inner[3]]}, but the status is ${c.type}`);
     }
-    if (c.gstins.filter(g => g === v).length > 1) return err('This GSTIN is entered twice');
     const dup = others(c).find(x => (x.gst || []).some(g => g.gstin === v));
     if (dup) return err(`This GSTIN is already saved for ${dup.name}`);
-    return ok(`${st}${PAN_RE.test(c.pan) ? ' · PAN matches' : ''}`);
+    return ok(`${st}${v[13] === 'C' ? ' · e-commerce (TCS)' : ''}${PAN_RE.test(c.pan) ? ' · PAN matches' : ''}`);
   },
   gstUser: v => /^[A-Za-z0-9._-]{8,15}$/.test(v) ? null : warn('GST portal usernames are usually 8–15 letters, numbers, . _ or -'),
   ifsc: v => /^[A-Z]{4}0[A-Z0-9]{6}$/.test(v) ? null : err('IFSC is 4 letters, 0, then 6 letters/digits (e.g. SBIN0001234)'),

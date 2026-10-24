@@ -8,6 +8,8 @@ class AuthError extends Error {}
 class NetError extends Error {}
 // Signed in, but this account may not open a vault (email not verified, or not approved yet).
 class AccessError extends Error {}
+// The document changed on the server since this device last saw it (another device saved it).
+class ConflictError extends Error {}
 const isNet = e => e instanceof TypeError || e instanceof NetError || e?.name === 'TimeoutError';
 const NET_WAIT = 20000; // a request that takes longer than this counts as offline
 const timeout = () => AbortSignal.timeout?.(NET_WAIT);
@@ -61,12 +63,17 @@ function firebaseBackend() {
     const j = await r.json().catch(() => ({}));
     if (r.status === 401) throw new AuthError('Your session expired. Please sign in again.');
     if (r.status === 403) throw new AccessError('This account doesn’t have access to the vault yet.');
+    if ((r.status === 400 || r.status === 409) && /FAILED_PRECONDITION|ALREADY_EXISTS/.test(j.error?.status || '')) throw new ConflictError('Changed on another device.');
     if (!r.ok) throw Object.assign(new Error('Couldn’t reach the vault. Please try again.'), { status: r.status });
     return j;
   }
   const toFields = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'number' ? { integerValue: String(v) } : { stringValue: String(v) }]));
-  const fromDoc = d => { const o = { id: d.name.split('/').pop() }; for (const [k, v] of Object.entries(d.fields || {})) o[k] = v.integerValue !== undefined ? +v.integerValue : v.stringValue; return o; };
+  const fromDoc = d => { const o = { id: d.name.split('/').pop(), _t: d.updateTime }; for (const [k, v] of Object.entries(d.fields || {})) o[k] = v.integerValue !== undefined ? +v.integerValue : v.stringValue; return o; };
   const mask = keys => keys.map(k => 'updateMask.fieldPaths=' + encodeURIComponent(k)).join('&');
+  // Write only if the document is still as last seen (pre = its updateTime), or doesn't exist yet
+  // (pre = null). Without pre the write always goes through.
+  const precond = pre => pre === null ? 'currentDocument.exists=false' : pre ? 'currentDocument.updateTime=' + encodeURIComponent(pre) : '';
+  const withQ = (path, ...qs) => { const q = qs.filter(Boolean).join('&'); return q ? `${path}?${q}` : path; };
   const base = () => `/users/${encodeURIComponent(auth.uid)}`;
   const emailKey = e => encodeURIComponent(String(e || '').toLowerCase());
   const listAll = async path => {
@@ -90,7 +97,7 @@ function firebaseBackend() {
       const j = await post(`${ID}:signUp?key=${CFG.apiKey}`, { email, password, returnSecureToken: true });
       saveAuth({ uid: j.localId, email: j.email, name, refreshToken: j.refreshToken, idToken: j.idToken, exp: Date.now() + j.expiresIn * 1000 });
       await post(`${ID}:update?key=${CFG.apiKey}`, { idToken: j.idToken, displayName: name }).catch(() => {});
-      await this.sendVerify();
+      await this.sendVerify().catch(() => {}); // can be sent again from the next screen
     },
     async sendVerify() { await post(`${ID}:sendOobCode?key=${CFG.apiKey}`, { requestType: 'VERIFY_EMAIL', idToken: await token() }); },
     async applyVerify(oobCode) { await post(`${ID}:update?key=${CFG.apiKey}`, { oobCode }); },
@@ -111,10 +118,9 @@ function firebaseBackend() {
     async deleteAccount() { await post(`${ID}:delete?key=${CFG.apiKey}`, { idToken: await token() }); saveAuth(null); },
     // Access requests and approvals (see firebase/firestore.rules).
     async myApproval() { return !!(await fs('GET', `/approved/${emailKey(auth.email)}`)); },
-    async myRequest() { return !!(await fs('GET', `/requests/${emailKey(auth.email)}`)); },
     async requestAccess(name) {
       try { await fs('PATCH', `/requests/${emailKey(auth.email)}?currentDocument.exists=false`, { fields: toFields({ name: String(name || '').slice(0, 80), at: Date.now() }) }); }
-      catch (e) { if (e.status !== 400 && e.status !== 409) throw e; } // already asked
+      catch (e) { if (!(e instanceof ConflictError) && !(e instanceof AccessError)) throw e; } // already asked
     },
     async withdrawRequest() { await fs('DELETE', `/requests/${emailKey(auth.email)}`).catch(() => {}); },
     listRequests: () => listAll('/requests'),
@@ -130,16 +136,10 @@ function firebaseBackend() {
     async confirmReset(oobCode, newPassword) { await post(`${ID}:resetPassword?key=${CFG.apiKey}`, { oobCode, newPassword }); },
     signOut() { saveAuth(null); },
     async getVault() { const d = await fs('GET', base()); return d && fromDoc(d); },
-    async putVault(f) { await fs('PATCH', `${base()}?${mask(Object.keys(f))}`, { fields: toFields(f) }); },
-    async listClients() {
-      const out = []; let pt = '';
-      do {
-        const j = await fs('GET', `${base()}/clients?pageSize=300${pt ? '&pageToken=' + encodeURIComponent(pt) : ''}`);
-        (j?.documents || []).forEach(d => out.push(fromDoc(d))); pt = j?.nextPageToken;
-      } while (pt);
-      return out;
-    },
-    async putClient(id, rec) { await fs('PATCH', `${base()}/clients/${id}`, { fields: toFields(rec) }); },
+    async putVault(f, pre) { return (await fs('PATCH', withQ(base(), mask(Object.keys(f)), precond(pre)), { fields: toFields(f) })).updateTime; },
+    listClients: () => listAll(`${base()}/clients`),
+    async getClient(id) { const d = await fs('GET', `${base()}/clients/${id}`); return d && fromDoc(d); },
+    async putClient(id, rec, pre) { return (await fs('PATCH', withQ(`${base()}/clients/${id}`, precond(pre)), { fields: toFields(rec) })).updateTime; },
     async delClient(id) { await fs('DELETE', `${base()}/clients/${id}`); },
     async delVault() { await fs('DELETE', base()); },
   };
@@ -153,9 +153,10 @@ function demoBackend() {
     user: { uid: 'demo', email: 'Demo mode' },
     async signIn() {}, async resetPassword() {}, checkResetCode: noReset, confirmReset: noReset, signOut() {},
     async getVault() { return (await store.get('demo:vault')) || null; },
-    async putVault(f) { await store.set('demo:vault', { ...((await store.get('demo:vault')) || {}), ...f }); },
+    async putVault(f) { await store.set('demo:vault', { ...((await store.get('demo:vault')) || {}), ...f }); return String(Date.now()); },
     async listClients() { return Object.values((await store.get('demo:clients')) || {}); },
-    async putClient(id, rec) { const m = (await store.get('demo:clients')) || {}; m[id] = { id, ...rec }; await store.set('demo:clients', m); },
+    async getClient(id) { return ((await store.get('demo:clients')) || {})[id] || null; },
+    async putClient(id, rec) { const m = (await store.get('demo:clients')) || {}; m[id] = { id, ...rec }; await store.set('demo:clients', m); return String(Date.now()); },
     async delClient(id) { const m = (await store.get('demo:clients')) || {}; delete m[id]; await store.set('demo:clients', m); },
     async delVault() { await store.del('demo:vault'); await store.del('demo:clients'); },
     async reauth() {}, async deleteAccount() {},

@@ -153,7 +153,7 @@ async function renderAccess(retried) {
     ACT.resend = async b => {
       b.disabled = true;
       try { await DB.sendVerify(); toast('Link sent'); setTimeout(() => { if (document.body.contains(b)) b.disabled = false; }, 30000); }
-      catch (e) { b.disabled = false; $('#err').textContent = e.message; }
+      catch (e) { b.disabled = false; $('#err').textContent = isNet(e) ? 'No internet connection.' : e.message; }
     };
   } else {
     try { await DB.requestAccess(u.name || DB.user.email); } catch {}
@@ -176,12 +176,12 @@ function renderCreate() {
       <input class="field" id="p2" type="password" placeholder="Confirm master password" autocomplete="new-password">
       <button class="btn primary" id="go" type="submit">Create vault</button>
       <p class="err" id="err" role="alert"></p>
-      <p class="hint">Use at least 10 characters, different from your sign-in password. <b>It can’t be recovered</b> — write it down and keep it safe.</p>
+      <p class="hint">At least 10 characters mixing capital and small letters, numbers or symbols (or 14+ characters), different from your sign-in password. <b>It can’t be recovered</b> — write it down and keep it safe.</p>
     </form>`);
   $('#f').onsubmit = async e => {
     e.preventDefault();
     const a = $('#p1').value, b = $('#p2').value, er = $('#err');
-    if (a.length < 10) return (er.textContent = 'Use at least 10 characters.');
+    if (pwWeak(a)) return (er.textContent = pwWeak(a));
     if (a !== b) return (er.textContent = 'Passwords don’t match.');
     const btn = $('#go'); btn.disabled = true; btn.textContent = 'Creating…';
     try {
@@ -202,21 +202,32 @@ function renderCreate() {
 
 async function finishUnlock(raw) {
   renderLoading('Opening your vault…');
-  let offline = PV.offline, recs = null;
   await loadOutbox();
+  const cache = await store.get(cacheKey()).catch(() => null);
+  let offline = PV.offline;
+  S = { key: await dataKey(raw), raw, vault: PV.vault, meta: {}, clients: [], recs: new Map(), offline, syncedAt: 0, loading: true };
+  // Start from this device's copy: it has the changes still waiting to upload, and the versions they're based on.
+  if (OUT.has('vault') && cache?.vault) S.vault = { ...S.vault, metaIv: cache.vault.metaIv, metaCt: cache.vault.metaCt, _t: cache.vault._t };
+  try { await applyMeta(); } catch { S.meta = { customFields: [] }; }
+  await applyRecs(cache?.clients || []);
   if (!offline) {
     try {
-      // Upload changes made offline last time first, so the list below already includes them.
-      if (OUT.size) { await flushOutbox(); PV.vault = (await DB.getVault()) || PV.vault; }
-      recs = await DB.listClients();
-    } catch (ex) { if (ex instanceof AuthError) return signOut(ex.message); offline = true; }
+      if (OUT.size) await flushOutbox(); // merged with anything changed elsewhere meanwhile
+      const [v, recs] = await Promise.all([DB.getVault(), DB.listClients()]);
+      if (v) { S.vault = v; await applyMeta(); }
+      await applyRecs(recs);
+      S.syncedAt = Date.now();
+    } catch (ex) {
+      if (ex instanceof AuthError) return signOut(ex.message);
+      if (!isNet(ex)) toast(errText(ex));
+      offline = true;
+    }
   }
-  if (offline) recs = ((await store.get(cacheKey()).catch(() => null)) || {}).clients || [];
-  S = { key: await dataKey(raw), raw, vault: PV.vault, meta: {}, clients: [], recs: new Map(), offline, syncedAt: offline ? 0 : Date.now() };
-  try { await applyMeta(); } catch { S.meta = { customFields: [] }; }
-  await applyRecs(recs);
+  S.offline = offline; S.loading = false;
   if (!offline) writeCache();
   lastActive = Date.now();
+  if (S.merged) { toast('Changes from another device were combined with yours'); S.merged = 0; }
+  if (await restoreDraft()) return;
   go(needsWelcome() ? 'welcome' : 'list');
 }
 

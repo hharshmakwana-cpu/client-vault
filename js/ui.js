@@ -50,7 +50,7 @@ const DEPTH = { list: 0, due: 0, dash: 0, settings: 0, detail: 2, bulk: 2, ext: 
 const toDetailOr = (a, v, arg) => a.back === v ? { v, arg } : { v: 'detail', arg: a.id };
 const PARENT = {
   detail: () => ({ v: DETAIL_BACK }), due: () => ({ v: 'list' }), dash: () => ({ v: 'list' }), settings: () => ({ v: 'list' }),
-  edit: id => id ? { v: 'detail', arg: id } : { v: 'list' }, comp: a => ({ v: 'detail', arg: a?.id ?? a }), fees: id => ({ v: 'detail', arg: id }),
+  edit: a => { const id = a?.id ?? (typeof a === 'string' ? a : null); return id ? { v: 'detail', arg: id } : { v: 'list' }; }, comp: a => ({ v: 'detail', arg: a?.id ?? a }), fees: id => ({ v: 'detail', arg: id }),
   task: a => a.back === 'detail' ? { v: 'detail', arg: a.id } : { v: 'due' }, bulk: () => ({ v: 'due' }), ext: a => ({ v: a?.back || 'due' }), doc: a => ({ v: 'fees', arg: a.id }), firm: a => a?.back ? { v: 'doc', arg: a.back } : { v: a?.from || 'settings' }, welcome: a => ({ v: a?.edit ? 'settings' : 'list' }), team: () => ({ v: 'settings' }), erase: () => ({ v: 'settings' }),
   wa: a => a.back === 'task' ? { v: 'task', arg: a.task } : toDetailOr(a, 'fees', a.id),
   login: a => a.back === 'task' ? { v: 'task', arg: a.task } : { v: 'detail', arg: a.id },

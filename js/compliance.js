@@ -58,7 +58,10 @@ const COMP = [
   { code: 'DPT3', group: 'ROC', types: ['Company'], name: 'DPT-3 (return of deposits)', due: '30 Jun', gen: yearly(6, 30) },
   { code: 'MSME1', group: 'ROC', types: ['Company'], name: 'MSME-1 (dues to MSMEs)', due: '31 Oct · 30 Apr',
     gen: dated(s => [[s, 10, 31, `Apr–Sep ${s}`], [s + 1, 4, 30, `Oct ${s} – Mar ${s + 1}`]]) },
-  { code: 'DIR3', group: 'ROC', types: ['Company', 'LLP'], name: 'DIR-3 KYC (directors / partners)', due: '30 Sep', gen: yearly(9, 30, s => `${FY(s)} · as on 31 Mar ${s + 1}`) },
+  // Since 31 Mar 2026 (G.S.R. 943(E)): once every three financial years, by 30 June. Those who filed
+  // in FY 2024-25 next file by 30 Jun 2028; a director on a different cycle can have the date changed.
+  { code: 'DIR3', group: 'ROC', types: ['Company', 'LLP'], name: 'DIR-3 KYC (directors / partners)', due: '30 Jun, every 3 years (next 2028)',
+    gen: s => (s + 1 - 2028) % 3 ? [] : [{ p: `FY${s}`, label: `Every 3 years · DINs as on 31 Mar ${s + 1}`, due: ymd(s + 1, 6, 30) }] },
   { code: 'LLP11', group: 'ROC', types: ['LLP'], name: 'LLP Form 11 (annual return)', due: '30 May', gen: yearly(5, 30) },
   { code: 'LLP8', group: 'ROC', types: ['LLP'], name: 'LLP Form 8 (accounts)', due: '30 Oct', gen: yearly(10, 30) },
 ];
@@ -127,7 +130,7 @@ const DEFAULT_TPLS = [
   { id: 'filed', name: 'Return filed', text: 'Dear {name}, your {return} for {period} has been filed on {filed}. Acknowledgement no.: {ack}. — {firm}' },
   { id: 'fees', name: 'Fees reminder', text: 'Dear {name}, a balance of {balance} is pending towards our professional fees. Kindly arrange the payment at your convenience. — {firm}' },
 ];
-const tpls = () => S.meta.templates || DEFAULT_TPLS;
+const tpls = () => S.meta.templates?.length ? S.meta.templates : DEFAULT_TPLS;
 const TPL_TAGS = ['name', 'pan', 'gstin', 'ay', 'fy', 'return', 'period', 'due', 'filed', 'ack', 'balance', 'firm'];
 function fillTpl(text, c, t) {
   const last = new Date(); last.setDate(1); last.setMonth(last.getMonth() - 1);
@@ -173,7 +176,7 @@ function dueLists() {
     today, all,
     open,
     overdue: open.filter(t => t.due < today),
-    week: open.filter(t => t.due <= wk),
+    week: open.filter(t => t.due >= today && t.due <= wk), // overdue ones are counted separately
     filed: all.filter(t => DONE.has(t.status) && (t.w.on || t.due) >= addDays(today, -60)).reverse(),
   };
 }

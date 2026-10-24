@@ -36,23 +36,115 @@ const writeCache = () => store.set(cacheKey(), { vault: S.vault, clients: [...S.
 // The few actions that must reach the server straight away.
 function needOnline() { if (S.offline) { toast('You’re offline — this needs an internet connection.'); return false; } return true; }
 
+// ---------- merging changes from two devices ----------
+// Each save says which server version it was based on. If another device saved in between, the
+// server refuses (ConflictError); the app then fetches that version and merges: whatever only one
+// side changed is kept, so both edits survive. If both changed the very same thing, this device's
+// change wins. Fees are matched by id, so bills and payments added on two devices are all kept.
+const stable = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(n => [n, x[n]])) : x);
+const same = (a, b) => stable(a) === stable(b);
+const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
+const byId = a => Array.isArray(a) && a.length > 0 && a.every(x => isObj(x) && typeof x.id === 'string');
+function merge3(base, mine, theirs) {
+  if (same(mine, theirs)) return mine;
+  if (same(base, mine)) return theirs;
+  if (same(base, theirs)) return mine;
+  if (isObj(mine) && isObj(theirs)) {
+    const out = {};
+    for (const k of new Set([...Object.keys(mine), ...Object.keys(theirs)])) {
+      const v = merge3(isObj(base) ? base[k] : undefined, mine[k], theirs[k]);
+      if (v !== undefined) out[k] = v;
+    }
+    return out;
+  }
+  if ((byId(mine) || byId(theirs)) && [mine, theirs].every(a => Array.isArray(a) && (!a.length || byId(a)))) {
+    const find = (a, id) => (Array.isArray(a) ? a : []).find(x => x.id === id);
+    const ids = [...new Set([...mine.map(x => x.id), ...theirs.map(x => x.id)])];
+    return ids.map(id => merge3(find(base, id), find(mine, id), find(theirs, id))).filter(x => x !== undefined);
+  }
+  return mine;
+}
+
 // ---------- offline outbox ----------
 // Every change is applied on this device first. If the vault can't be reached, the change —
 // already encrypted — waits here (in IndexedDB, so it survives closing the app) and is uploaded
-// once the connection is back. One entry per document: a newer change to the same client
-// replaces the waiting one. Entries: 'c:<id>' → {t:'put', id, rec} | {t:'del', id}; 'vault' → {t:'vault', f}.
+// once the connection is back. One entry per document: a newer change to the same document
+// replaces the waiting one but keeps the version it was originally based on.
+// Entries: 'c:<id>' → {t:'put', id, rec, base, pre} | {t:'del', id}; 'vault' → {t:'vault', f, base, pre}.
+// base: the encrypted version the change started from; pre: that version's server updateTime.
 let OUT = new Map(), writeGen = 0, flushing = null;
 const outboxKey = () => 'outbox:' + DB.user.uid;
 async function loadOutbox() { OUT = new Map((await store.get(outboxKey()).catch(() => null)) || []); }
 const saveOutbox = () => store.set(outboxKey(), [...OUT]).catch(() => {});
-const sendOp = op => op.t === 'put' ? DB.putClient(op.id, op.rec) : op.t === 'del' ? DB.delClient(op.id) : DB.putVault(op.f);
+const sendOp = op => op.t === 'put' ? putClientMerged(op) : op.t === 'del' ? DB.delClient(op.id) : putVaultMerged(op);
+async function putClientMerged(op) {
+  let rec = op.rec, pre = op.pre;
+  for (let i = 0; i < 4; i++) {
+    try {
+      const t = await DB.putClient(op.id, rec, pre);
+      if (S) {
+        const merged = rec !== op.rec;
+        S.recs.set(op.id, { id: op.id, ...rec, _t: t });
+        if (merged) { const c = tidy(await decJSON(S.key, rec)); c.id = op.id; const k = S.clients.findIndex(x => x.id === op.id); k < 0 ? S.clients.push(c) : (S.clients[k] = c); }
+        writeCache();
+      }
+      return;
+    } catch (e) {
+      if (!(e instanceof ConflictError) || !S) throw e;
+      const theirs = await DB.getClient(op.id);
+      const mine = await decJSON(S.key, rec);
+      let next = mine;
+      if (theirs) {
+        const base = op.base ? await decJSON(S.key, op.base) : null;
+        next = merge3(base, mine, await decJSON(S.key, theirs));
+        next.updated = Date.now();
+      }
+      const x = await encJSON(S.key, next);
+      rec = { iv: x.iv, ct: x.ct, updated: next.updated };
+      pre = theirs ? theirs._t : null;
+      S.merged = (S.merged || 0) + 1;
+    }
+  }
+  throw new Error('This client keeps changing on another device — please try again.');
+}
+async function putVaultMerged(op) {
+  let f = op.f, pre = op.pre;
+  for (let i = 0; i < 4; i++) {
+    try {
+      const t = await DB.putVault(f, pre);
+      if (S) {
+        const merged = f !== op.f;
+        Object.assign(S.vault, f, { _t: t });
+        if (merged) await applyMeta();
+        writeCache();
+      }
+      return;
+    } catch (e) {
+      if (!(e instanceof ConflictError) || !S) throw e;
+      const theirs = await DB.getVault();
+      if (theirs?.metaCt && f.metaCt) {
+        const base = op.base ? await decJSON(S.key, op.base) : null;
+        const merged = merge3(base, await decJSON(S.key, { iv: f.metaIv, ct: f.metaCt }), await decJSON(S.key, { iv: theirs.metaIv, ct: theirs.metaCt }));
+        const x = await encJSON(S.key, merged);
+        f = { ...f, metaIv: x.iv, metaCt: x.ct };
+      }
+      pre = theirs ? theirs._t : null;
+      S.merged = (S.merged || 0) + 1;
+    }
+  }
+  throw new Error('Settings keep changing on another device — please try again.');
+}
 async function push(k, op) {
   writeGen++;
+  const old = OUT.get(k);
+  if (old && old.t === op.t && op.t !== 'del') {
+    op = { ...op, base: old.base, pre: old.pre }; // still based on the version the first waiting change started from
+    if (op.t === 'vault') op.f = { ...old.f, ...op.f };
+  }
   if (!OUT.size && !S.offline) {
     try { return await sendOp(op); }
     catch (e) { if (!isNet(e)) throw e; setOffline(true); }
   }
-  if (op.t === 'vault' && OUT.has(k)) op = { t: 'vault', f: { ...OUT.get(k).f, ...op.f } };
   OUT.delete(k); OUT.set(k, op); // re-insert, so the queue keeps the order the changes were made in
   await saveOutbox();
 }
@@ -74,14 +166,20 @@ function setOffline(on) {
   if (cur.v === 'list') go('list', undefined, true);
 }
 
+// Saves on this device straight away, then uploads (or queues the upload). If the upload is
+// refused for a reason other than the connection, the change is undone here too.
 async function saveClient(c) {
-  const e = await encJSON(S.key, c);
+  const e = await encJSON(S.key, c), prev = S.recs.get(c.id), prevClient = S.clients.find(x => x.id === c.id);
   const rec = { iv: e.iv, ct: e.ct, updated: c.updated };
-  await push('c:' + c.id, { t: 'put', id: c.id, rec });
-  S.recs.set(c.id, { id: c.id, ...rec });
-  const i = S.clients.findIndex(x => x.id === c.id);
-  i < 0 ? S.clients.push(c) : (S.clients[i] = c);
+  const put = (r, cl) => {
+    r ? S.recs.set(c.id, r) : S.recs.delete(c.id);
+    const i = S.clients.findIndex(x => x.id === c.id);
+    if (!cl) S.clients = S.clients.filter(x => x.id !== c.id); else i < 0 ? S.clients.push(cl) : (S.clients[i] = cl);
+  };
+  put({ id: c.id, ...rec, _t: prev?._t }, c);
   writeCache();
+  try { await push('c:' + c.id, { t: 'put', id: c.id, rec, base: prev ? { iv: prev.iv, ct: prev.ct } : null, pre: prev ? prev._t : null }); }
+  catch (er) { put(prev, prevClient); writeCache(); throw er; }
 }
 async function deleteClient(id) {
   await push('c:' + id, { t: 'del', id });
@@ -89,15 +187,16 @@ async function deleteClient(id) {
   writeCache();
 }
 async function saveMeta() {
-  const e = await encJSON(S.key, S.meta);
-  await push('vault', { t: 'vault', f: { metaIv: e.iv, metaCt: e.ct } });
+  const e = await encJSON(S.key, S.meta), prev = { metaIv: S.vault.metaIv, metaCt: S.vault.metaCt };
   Object.assign(S.vault, { metaIv: e.iv, metaCt: e.ct });
   writeCache();
+  try { await push('vault', { t: 'vault', f: { metaIv: e.iv, metaCt: e.ct }, base: prev.metaCt ? { iv: prev.metaIv, ct: prev.metaCt } : null, pre: S.vault._t }); }
+  catch (er) { Object.assign(S.vault, prev); writeCache(); throw er; }
 }
 
 let syncing = false;
 async function sync() {
-  if (!S || syncing) return;
+  if (!S || syncing || S.loading) return;
   syncing = true;
   const hadPending = OUT.size;
   try {
@@ -112,7 +211,8 @@ async function sync() {
       S.syncedAt = Date.now(); writeCache();
     }
     S.offline = false;
-    if (hadPending) toast(`${plural(hadPending, 'change')} uploaded`);
+    if (S.merged) { toast('Changes from another device were combined with yours'); S.merged = 0; }
+    else if (hadPending) toast(`${plural(hadPending, 'change')} uploaded`);
     if (cur.v === 'list' || cur.v === 'detail') go(cur.v, cur.arg, true);
   } catch (e) {
     if (e instanceof AuthError) return signOut(e.message);
@@ -217,7 +317,21 @@ document.addEventListener('visibilitychange', () => {
 // Face ID starts by itself only when the app is opened or brought back — not right after
 // "Lock now" or an idle lock while the screen is on, which would just ask again at once.
 let bioAuto = true;
+// A half-filled client form is kept when the app locks — encrypted, in memory only — and opened
+// again after unlocking. Signing out drops it.
+let DRAFT = null, EDIT_DRAFT = null;
+function keepDraft() {
+  const d = S && cur.v === 'edit' && EDIT_DRAFT?.();
+  if (d) encJSON(S.key, d).then(x => { DRAFT = x; }, () => {});
+}
+async function restoreDraft() {
+  if (!DRAFT) return false;
+  const x = DRAFT; DRAFT = null;
+  try { const d = await decJSON(S.key, x); go('edit', { id: d.id, draft: d }); toast('Your unsaved changes are back'); return true; }
+  catch { return false; }
+}
 function lock(auto = false) {
+  keepDraft();
   bioAuto = auto;
   finishTransition?.();
   S = null; Q = ''; ACT = {}; bioPending = null; cur = { v: null };
@@ -228,7 +342,7 @@ function lock(auto = false) {
 // A session that expired (msg set) keeps waiting changes, so they upload after signing in again.
 async function signOut(msg) {
   if (DB.user) { await store.del(cacheKey()).catch(() => {}); writeLS(bioKey(), null); if (!msg) await store.del(outboxKey()).catch(() => {}); }
-  OUT = new Map(); writeLS('cv-brand', null);
+  OUT = new Map(); DRAFT = null; writeLS('cv-brand', null);
   S = null; PV = null;
   DB.signOut();
   renderSignIn(msg);

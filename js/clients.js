@@ -246,7 +246,9 @@ function fieldHTML(f, v, type) {
     f.rule ? ` data-rule="${f.rule}"` : ''}${f.norm ? ` data-norm="${f.norm}"` : ''}${
     f.up ? ' autocapitalize="characters"' : ['name', 'address', 'notes', 'bankName'].includes(f.k) ? '' : ' autocapitalize="off"'}`;
   let input;
-  if (f.kind === 'select') {
+  if (f.kind === 'state') {
+    input = `<select class="finput" ${attrs}><option value="">Choose</option>${STATES.map(o => `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+  } else if (f.kind === 'select') {
     const opts = TYPES.includes(v) || !v ? TYPES : [...TYPES, v];
     input = `<select class="finput" ${attrs}>${opts.map(o => `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
   } else if (f.kind === 'textarea') input = `<textarea class="finput" ${attrs} placeholder="${esc(fnv(f.ph, type) || '')}">${esc(v)}</textarea>`;
@@ -258,9 +260,11 @@ function fieldHTML(f, v, type) {
     f.secret ? eyeBtn(name) : ''}${f.rule ? msgDiv : ''}</div>`;
 }
 
-function renderEdit(id) {
+// a: the client id (null for a new client), or { id, draft } to reopen unsaved changes.
+function renderEdit(a) {
+  const id = a?.id ?? (typeof a === 'string' ? a : null), draft = a?.draft;
   const orig = id && S.clients.find(x => x.id === id);
-  const c = orig ? structuredClone(orig) : tidy({ type: 'Individual' });
+  const c = draft ? tidy(structuredClone(draft)) : orig ? structuredClone(orig) : tidy({ type: 'Individual' });
   // A new client starts with just the basics; everything else opens with "Add more details".
   const BASIC = ['name', 'type', 'mobile', 'email', 'pan'];
   const fieldsOf = keys => keys.map(k => FIELDS.find(f => f.k === k));
@@ -304,13 +308,13 @@ function renderEdit(id) {
 
   const form = $('#form');
   form.onsubmit = e => e.preventDefault();
-  let dirty = false, typeTouched = !!orig;
+  let dirty = !!draft, typeTouched = !!orig || !!draft;
   const typeSel = $('[data-k="type"]', form);
   const val = k => $(`[data-k="${k}"]`, form).value.trim();
   const ctx = () => ({
     type: typeSel.value, name: val('name'), pan: NORM.id(val('pan')), dob: val('dob'), self: c.id,
     biz: PERSONAL.has(typeSel.value) ? $$('[data-bf="name"]', form).map(i => i.value.trim()).filter(Boolean) : [],
-    gstins: $$('[data-gf="gstin"]', form).map(i => NORM.id(i.value)).filter(Boolean),
+    gstins: $$('[data-gf="gstin"]', form).map(i => NORM.id(i.value)).filter(Boolean), tan: NORM.id(val('tan')),
   });
   const showMsg = (el, res) => {
     const row = el.closest('.frow'), m = $('.fmsg', row);
@@ -387,6 +391,7 @@ function renderEdit(id) {
   typeSel.addEventListener('change', () => { typeTouched = true; relabel(); validateAll(); });
 
   ACT.cancel = () => { if (!dirty || confirm('Discard your changes?')) orig ? goBack('detail', id) : goBack('list'); };
+  EDIT_DRAFT = () => dirty ? { ...collect(), id: c.id } : null;
   ACT.more = () => {
     $('#more').hidden = false; $('#moreBtn').hidden = true; if ($('#moreFoot')) $('#moreFoot').hidden = true;
     $('#more .finput:not([hidden])')?.focus({ preventScroll: true });
@@ -419,17 +424,8 @@ function renderEdit(id) {
     if (!confirm(`Delete ${orig.name}? This can’t be undone.`)) return;
     try { await deleteClient(id); toast('Client deleted'); go('list'); } catch (e) { toast(errText(e)); }
   };
-  ACT.save = async t => {
-    $$('[data-norm]', form).forEach(normalise);
-    const results = validateAll();
-    const nameEl = $('[data-k="name"]', form);
-    if (!nameEl.value.trim()) { const r = err('Name is required'); showMsg(nameEl, r); results.unshift([nameEl, r]); }
-    const errors = results.filter(([, r]) => r.level === 'err');
-    if (errors.length) {
-      toast(errors.length === 1 ? 'Please fix the highlighted field' : `Please fix ${errors.length} highlighted fields`);
-      errors[0][0].scrollIntoView({ block: 'center', behavior: 'smooth' });
-      return errors[0][0].focus({ preventScroll: true });
-    }
+  // Everything on the form, as a client record (not yet checked).
+  const collect = () => {
     const type = typeSel.value;
     const d = { ...c, type, custom: {}, extra: [] };
     for (const f of FIELDS) {
@@ -443,19 +439,42 @@ function renderEdit(id) {
       const same = $('.switch', b).getAttribute('aria-checked') === 'true';
       return { name: g('name'), nature: g('nature'), same, address: same ? '' : g('address'), udyam: g('udyam') };
     }).filter(b => b.name || b.nature || b.address || b.udyam);
-    if (!PERSONAL.has(type) && biz.length && !confirm(`A ${type} is itself the business, so the business / trade name entries will be removed. Continue?`)) return;
+    d._biz = !PERSONAL.has(type) && biz.length > 0;
     d.businesses = PERSONAL.has(type) ? biz : [];
     d.gst = $$('[data-gst]', form).map(g => {
       const v = k => $(`[data-gf="${k}"]`, g).value.trim();
       return { gstin: v('gstin'), user: v('user'), pass: v('pass') };
     }).filter(g => g.gstin || g.user || g.pass);
-    const firstGstin = d.gst.find(g => GSTIN_RE.test(g.gstin))?.gstin;
-    if (!d.pan && firstGstin) d.pan = firstGstin.slice(2, 12);
+    const firstPan = d.gst.map(g => gstinPan(g.gstin)).find(Boolean);
+    if (!d.pan && firstPan) d.pan = firstPan;
+    // The state decides CGST + SGST or IGST on invoices: from the GSTIN, else from the address.
+    if (!d.state) {
+      const fromGst = GST_STATES[d.gst.find(g => GSTIN_RE.test(g.gstin))?.gstin.slice(0, 2)];
+      d.state = STATE_CODE[fromGst] ? fromGst : stateInText(d.address);
+      if (!d.state) delete d.state;
+    }
     d.contacts = $$('[data-contact]', form).map(b => {
       const g = k => $(`[data-cf="${k}"]`, b).value.trim();
       return { name: g('name'), role: g('role'), mobile: g('mobile'), email: g('email') };
     }).filter(p => p.name || p.mobile || p.email);
     delete d.itUser;
+    return d;
+  };
+  ACT.save = async t => {
+    $$('[data-norm]', form).forEach(normalise);
+    const results = validateAll();
+    const nameEl = $('[data-k="name"]', form);
+    if (!nameEl.value.trim()) { const r = err('Name is required'); showMsg(nameEl, r); results.unshift([nameEl, r]); }
+    const errors = results.filter(([, r]) => r.level === 'err');
+    if (errors.length) {
+      toast(errors.length === 1 ? 'Please fix the highlighted field' : `Please fix ${errors.length} highlighted fields`);
+      errors[0][0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return errors[0][0].focus({ preventScroll: true });
+    }
+    const d = collect();
+    const type = d.type;
+    if (!PERSONAL.has(type) && d._biz && !confirm(`A ${type} is itself the business, so the business / trade name entries will be removed. Continue?`)) return;
+    delete d._biz;
     // Remember when each portal password was last changed, for the change reminders.
     d.pwd = { ...c.pwd };
     const stamp = (k, before, now) => { if (!now) delete d.pwd[k]; else if (now !== before || !d.pwd[k]) d.pwd[k] = todayStr(); };

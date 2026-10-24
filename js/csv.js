@@ -20,7 +20,7 @@ const CSV_COLS = {
   name: ['name', 'client name', 'full name', 'legal name', 'client'], type: ['status', 'type', 'client type', 'category', 'constitution'],
   fileNo: ['file no', 'file', 'file number'], group: ['group', 'family', 'group / family'], pan: ['pan', 'pan no', 'pan number'],
   aadhaar: ['aadhaar', 'aadhar', 'aadhaar no', 'aadhar no', 'aadhaar number'], mobile: ['mobile', 'phone', 'mobile no', 'contact no', 'contact', 'mobile number'],
-  email: ['email', 'email id', 'e-mail'], dob: ['dob', 'date of birth', 'doi', 'date of incorporation', 'dob / doi'], address: ['address'],
+  email: ['email', 'email id', 'e-mail'], state: ['state', 'state / ut'], dob: ['dob', 'date of birth', 'doi', 'date of incorporation', 'dob / doi'], address: ['address'],
   gstin: ['gstin', 'gst no', 'gst number', 'gst'], gstUser: ['gst username', 'gst user', 'gst user id'], gstPass: ['gst password'],
   itPass: ['it password', 'income tax password'],
   tracesUser: ['traces user id', 'traces user'], tracesPass: ['traces password'], tan: ['tan', 'tan no'],
@@ -53,6 +53,8 @@ function csvToClients(text) {
     const pan = NORM.id(get('pan')), rawType = get('type');
     c.type = (TYPE_WORDS.find(([re]) => re.test(rawType)) || [])[1] || (PAN_RE.test(pan) && PAN_TO_TYPE[pan[3]]) || 'Individual';
     for (const k of ['fileNo', 'group', 'address', 'itPass', 'tracesPass', 'bankName', 'notes']) { const v = get(k); if (v) c[k] = v; }
+    const st = get('state'), stName = STATES.find(n => n.toLowerCase() === st.toLowerCase());
+    if (st && !stName) warns.push(`State “${st}” wasn’t recognised`);
     if (get('contact')) c.contacts = [{ name: get('contact'), role: '', mobile: '', email: '' }];
     if (pan) c.pan = pan;
     const set = (k, norm) => { const v = get(k); if (v) c[k] = NORM[norm](v); };
@@ -64,11 +66,14 @@ function csvToClients(text) {
     c.gst = gstins.map((g, j) => ({ gstin: g, user: j ? '' : get('gstUser'), pass: j ? '' : get('gstPass') }));
     if (!gstins.length && (get('gstUser') || get('gstPass'))) c.gst = [{ gstin: '', user: get('gstUser'), pass: get('gstPass') }];
     if (get('business') && PERSONAL.has(c.type)) c.businesses = [{ name: get('business'), nature: '', same: true, address: '', udyam: '' }];
-    if (!c.pan && gstins[0] && GSTIN_RE.test(gstins[0])) c.pan = gstins[0].slice(2, 12);
+    if (!c.pan && gstinPan(gstins[0])) c.pan = gstinPan(gstins[0]);
+    const gstState = GST_STATES[gstins.find(g => GSTIN_RE.test(g))?.slice(0, 2)];
+    c.state = stName || (STATE_CODE[gstState] ? gstState : stateInText(c.address));
+    if (!c.state) delete c.state;
     for (const k of ['itPass', 'tracesPass']) if (c[k]) c.pwd[k === 'itPass' ? 'it' : 'traces'] = todayStr();
     c.gst.forEach(g => { if (g.pass && g.gstin) c.pwd['gst:' + g.gstin] = todayStr(); });
     // Same checks as the edit screen.
-    const x = { type: c.type, name: c.name, pan: c.pan || '', dob: c.dob || '', self: undefined, biz: c.businesses.map(b => b.name), gstins };
+    const x = { type: c.type, name: c.name, pan: c.pan || '', dob: c.dob || '', self: undefined, biz: c.businesses.map(b => b.name), gstins, tan: c.tan || '' };
     const check = (rule, v) => { if (!v || !RULES[rule]) return; const res = RULES[rule](v, x); if (res?.level === 'err') errors.push(res.msg); else if (res?.level === 'warn') warns.push(res.msg); };
     check('name', c.name || 'x'); if (!c.name) errors.push('Name is missing');
     check('pan', c.pan); check('aadhaar', PERSONAL.has(c.type) && c.aadhaar); check('mobile', c.mobile); check('email', c.email);
@@ -100,10 +105,10 @@ function saveFile(name, text, type, done) {
 }
 function exportClientsCSV() {
   const dmy = s => s ? s.split('-').reverse().join('/') : '';
-  const head = ['Name', 'Status', 'File no', 'Group', 'PAN', 'Aadhaar (masked)', 'Mobile', 'Email', 'DOB / DOI', 'Address', 'GSTIN', 'TAN', 'CIN / LLPIN', 'Business names', 'Contact person', 'Fees outstanding'];
+  const head = ['Name', 'Status', 'File no', 'Group', 'PAN', 'Aadhaar (masked)', 'Mobile', 'Email', 'DOB / DOI', 'Address', 'State', 'GSTIN', 'TAN', 'CIN / LLPIN', 'Business names', 'Contact person', 'Fees outstanding'];
   const rows = [...S.clients].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(c => [
     c.name, c.type, c.fileNo, c.group, c.pan, c.aadhaar ? 'XXXX XXXX ' + aadhaarDigits(c.aadhaar).slice(-4) : '', c.mobile, c.email, dmy(c.dob),
-    c.address, c.gst.map(g => g.gstin).filter(Boolean).join('; '), c.tan, c.regNo, c.businesses.map(b => b.name).filter(Boolean).join('; '), c.contacts.map(p => [p.name, p.mobile].filter(Boolean).join(' ')).join('; '), feeTotals(c).due || '',
+    c.address, c.state, c.gst.map(g => g.gstin).filter(Boolean).join('; '), c.tan, c.regNo, c.businesses.map(b => b.name).filter(Boolean).join('; '), c.contacts.map(p => [p.name, p.mobile].filter(Boolean).join(' ')).join('; '), feeTotals(c).due || '',
   ]);
   saveFile(`client-list-${todayStr()}.csv`, toCSV([head, ...rows]), 'text/csv', () => toast('Client list exported'));
 }

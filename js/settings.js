@@ -17,7 +17,7 @@ function renderSettings() {
     </div>
     <div class="group-h">Security</div>
     <div class="group">
-      <div class="row"><span class="grow">Unlock with ${esc(BIO)}${BIO_OK ? '' : '<small>Not available on this device</small>'}</span>${sw(bioOn, 'bio', BIO_OK || bioOn ? '' : ' disabled')}</div>
+      <div class="row"><span class="grow">Unlock with ${esc(BIO)}${BIO_OK ? '' : '<small>Not available on this device</small>'}</span>${sw(bioOn, 'bio', ` aria-label="Unlock with ${esc(BIO)}"${BIO_OK || bioOn ? '' : ' disabled'}`)}</div>
       ${bioPending ? `<button class="row link" data-act="bioFinish">Finish setting up ${esc(BIO)}</button>` : ''}
       <label class="row"><span class="grow">Auto-lock</span><select class="plain" id="lockAfter">${lockOpts.map(([v, l]) => `<option value="${v}"${settings.lockAfter === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <button class="row link" data-act="changepw">Change master password</button>
@@ -158,7 +158,7 @@ function renderChangePw() {
   $('#f').onsubmit = async e => {
     e.preventDefault();
     const er = $('#err'), btn = $('#go'), a = $('#p1').value;
-    if (a.length < 10) return (er.textContent = 'Use at least 10 characters.');
+    if (pwWeak(a)) return (er.textContent = pwWeak(a));
     if (a !== $('#p2').value) return (er.textContent = 'New passwords don’t match.');
     btn.disabled = true; btn.textContent = 'Checking…';
     try { await unwrapDek($('#p0').value, S.vault); }
@@ -194,9 +194,19 @@ function renderImport(b) {
     try {
       let n = 0;
       if (b.vault.metaCt) {
-        const meta = await decJSON(key, { iv: b.vault.metaIv, ct: b.vault.metaCt });
-        const have = new Set(S.meta.customFields.map(f => f.id)), add = (meta.customFields || []).filter(f => !have.has(f.id));
-        if (add.length) { S.meta.customFields.push(...add); await saveMeta(); }
+        // Settings from the backup fill in whatever isn't set here: firm details (with the logo),
+        // messages, due date extensions, work handled, invoice numbering. Anything already set here is kept.
+        const meta = await decJSON(key, { iv: b.vault.metaIv, ct: b.vault.metaCt }), M = S.meta, before = stable(M);
+        const empty = v => v == null || v === '' || (Array.isArray(v) && !v.length) || (isObj(v) && !Object.keys(v).length);
+        const have = new Set(M.customFields.map(f => f.id));
+        M.customFields.push(...(meta.customFields || []).filter(f => !have.has(f.id)));
+        M.ext = { ...meta.ext, ...M.ext };
+        const seq = { ...meta.seq };
+        for (const [k, n] of Object.entries(M.seq || {})) seq[k] = Math.max(n, seq[k] || 0);
+        M.seq = seq;
+        if (isObj(meta.firmInfo)) { M.firmInfo ||= {}; for (const [k, v] of Object.entries(meta.firmInfo)) if (empty(M.firmInfo[k]) && !empty(v)) M.firmInfo[k] = v; }
+        for (const k of ['firm', 'templates', 'services', 'pwDays', 'setupDone']) if (empty(M[k]) && !empty(meta[k])) M[k] = meta[k];
+        if (stable(M) !== before) { await saveMeta(); cacheBrand(); }
       }
       for (const r of b.clients) {
         const c = tidy(await decJSON(key, r)); c.id = r.id;

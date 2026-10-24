@@ -1,0 +1,62 @@
+const BASE = process.env.BASE || 'http://localhost:8123/';
+const { chromium } = require('playwright');
+const OUT = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'cv-test-')), R = [];
+const check = (n, ok, i = '') => R.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${i ? '  — ' + i : ''}`);
+(async () => {
+  const b = await chromium.launch();
+  const p = await b.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+  const errs = []; p.on('pageerror', e => errs.push(e.message)); p.on('dialog', d => d.accept());
+  await p.route('**/config.js', r => r.fulfill({ contentType: 'text/javascript', body: 'window.CLIENT_VAULT_CONFIG={apiKey:""};' }));
+  const wait = ms => p.waitForTimeout(ms || 650);
+  await p.goto(BASE);
+  await p.fill('#p1', 'testpassword123'); await p.fill('#p2', 'testpassword123'); await p.click('#go'); await wait();
+  check('welcome screen on first use', await p.evaluate(() => cur.v) === 'welcome');
+  await p.screenshot({ path: OUT + '/n1-welcome.png', fullPage: true });
+  await p.fill('#wfirm', 'Makwana & Associates');
+  await p.click('[data-act="svc"][data-g="Payroll"]'); await p.click('[data-act="svc"][data-g="ROC"]');
+  await p.click('[data-act="go"]'); await wait();
+  check('welcome saves firm + work', await p.evaluate(() => cur.v === 'list' && S.meta.firm === 'Makwana & Associates' && S.meta.services.join() === 'Income Tax,GST,TDS'));
+  check('checklist + guided empty list', await p.locator('.guide').isVisible() && await p.locator('.empty [data-act="csv"]').isVisible() && !(await p.locator('.search').isVisible()));
+  check('no confusing zero tiles yet', !(await p.locator('.tiles').count()));
+  await p.screenshot({ path: OUT + '/n2-home.png', fullPage: true });
+
+  await p.click('.empty [data-act="add"]'); await wait();
+  check('new client form shows basics only', await p.locator('[data-k="name"]').isVisible() && !(await p.locator('[data-k="address"]').isVisible()) && await p.locator('[data-act="more"]').isVisible());
+  await p.screenshot({ path: OUT + '/n3-add.png', fullPage: true });
+  const gst = await p.evaluate(() => { const g = '24ABCPP1234F1Z'; return g + gstinCheckDigit(g); });
+  await p.fill('[data-k="name"]', 'Ramesh Kumar Patel'); await p.fill('[data-k="pan"]', 'ABCPP1234F'); await p.fill('[data-k="mobile"]', '9876543210');
+  await p.click('[data-act="gadd"]'); await p.fill('[data-gf="gstin"]', gst);
+  await p.click('[data-act="more"]'); await wait(300);
+  check('"Add more details" opens the rest', await p.locator('[data-k="address"]').isVisible());
+  await p.fill('[data-k="address"]', '12 MG Road, Ahmedabad 380001');
+  await p.click('[data-act="save"]'); await wait(900);
+  const comp = await p.evaluate(() => ({ v: cur.v, on: [...document.querySelectorAll('[data-act="tog"][aria-checked="true"]')].map(x => x.dataset.c) }));
+  check('suggested returns after adding', comp.v === 'comp' && comp.on.join() === 'ITR,GSTR1M,GSTR3BM,GSTR9', comp.on.join());
+  check('unused work hidden under "Show all returns"', await p.locator('[data-act="others"]').isVisible() && !(await p.locator('[data-c="PFESI"]').isVisible()));
+  await p.screenshot({ path: OUT + '/n4-suggest.png', fullPage: true });
+  await p.click('[data-act="save"]'); await wait(900);
+  check('back on client page after Done', await p.evaluate(() => cur.v) === 'detail');
+  await p.click('[data-tab="list"]'); await wait();
+  const g = await p.locator('.guide-h span').textContent();
+  check('checklist progress updates', g.startsWith('2 of 4'), g);
+  check('tiles appear once returns are tracked', await p.locator('.tiles').isVisible());
+  await p.screenshot({ path: OUT + '/n5-home.png', fullPage: true });
+
+  await p.click('[data-tab="settings"]'); await wait();
+  check('advanced settings tucked away', !(await p.locator('#cfName').isVisible()) && await p.locator('[data-act="adv"]').isVisible());
+  await p.screenshot({ path: OUT + '/n6-settings.png', fullPage: true });
+  await p.click('[data-act="adv"]'); await wait(300);
+  check('"More options" opens them', await p.locator('#cfName').isVisible());
+  await p.click('[data-act="work"]'); await wait();
+  check('work you handle editable', await p.evaluate(() => cur.v) === 'welcome' && await p.locator('[data-act="back"]').isVisible());
+  await p.keyboard.press('Escape'); await wait();
+
+  await p.click('[data-tab="due"]'); await wait();
+  await p.screenshot({ path: OUT + '/n7-due.png', fullPage: true });
+  // existing user with clients never sees welcome
+  await p.evaluate(() => lock()); await wait();
+  await p.fill('#pw', 'testpassword123'); await p.click('#go'); await wait(900);
+  check('returning user goes straight to clients', await p.evaluate(() => cur.v) === 'list');
+  check('no script errors', !errs.length, errs.join(' | '));
+  console.log(R.join('\n')); await b.close(); process.exit(R.some(r => r.startsWith('FAIL')) ? 1 : 0);
+})();

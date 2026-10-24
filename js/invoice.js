@@ -10,7 +10,6 @@ const firmInfo = () => {
 };
 // Address and bank details are separate fields. Earlier versions kept each as one block of
 // text ("address", "bank"); this fills the separate fields from that text until it's saved again.
-const STATE_NAMES = [...new Set(Object.values(GST_STATES))].sort();
 function splitOldFirm(F) {
   const o = {};
   if (F.address && !F.addr1 && !F.city) {
@@ -18,7 +17,7 @@ function splitOldFirm(F) {
     const pin = /\b([1-9]\d{2})\s?(\d{3})\b/.exec(t);
     if (pin) { o.pin = pin[1] + pin[2]; t = t.slice(0, pin.index) + t.slice(pin.index + pin[0].length); }
     let lines = t.split('\n').map(s => s.replace(/^[\s,\-–]+|[\s,\-–]+$/g, '')).filter(Boolean);
-    const st = STATE_NAMES.find(n => new RegExp(`(^|[\\s,])${n.replace(/[^\w\s]/g, '.')}$`, 'i').test(lines[lines.length - 1] || ''));
+    const st = STATES.find(n => new RegExp(`(^|[\\s,])${n.replace(/[^\w\s]/g, '.')}$`, 'i').test(lines[lines.length - 1] || ''));
     if (st) { o.state = st; lines[lines.length - 1] = lines[lines.length - 1].slice(0, -st.length).replace(/[\s,\-–]+$/, ''); lines = lines.filter(Boolean); }
     if (lines.length === 1 && lines[0].includes(',')) { const parts = lines[0].split(','); o.city = parts.pop().trim(); lines = [parts.join(',').trim()]; }
     else if (lines.length > 1) o.city = lines.pop();
@@ -79,12 +78,26 @@ function cacheBrand() {
   writeLS('cv-brand', F.name || l ? { name: F.name, logo: l?.src || '' } : null);
 }
 const fyLabel = s => `${s}-${String(s + 1).slice(2)}`;
-// Numbers run per financial year, e.g. INV/2026-27/001, and continue from the highest one in use.
+// Numbers run per financial year, e.g. INV/2026-27/001. The highest number ever given in each
+// series is also kept in the settings (S.meta.seq), so a deleted invoice's number is never reused.
+const seriesOf = (kind, date) => { const F = firmInfo(); return `${kind === 'bill' ? F.invPrefix : F.rcptPrefix}/${fyLabel(fyStart(date))}/`; };
 function nextNo(kind, date) {
-  const F = firmInfo(), pre = `${kind === 'bill' ? F.invPrefix : F.rcptPrefix}/${fyLabel(fyStart(date))}/`;
-  let max = 0;
+  const pre = seriesOf(kind, date);
+  let max = S.meta.seq?.[pre] || 0;
   for (const c of S.clients) for (const e of c.fees) if (e.no?.startsWith(pre)) max = Math.max(max, parseInt(e.no.slice(pre.length), 10) || 0);
   return pre + String(max + 1).padStart(3, '0');
+}
+// Records a number as given out (call after saving the entry that carries it).
+function noteNo(no) {
+  const i = no.lastIndexOf('/') + 1, pre = no.slice(0, i), n = parseInt(no.slice(i), 10) || 0;
+  if ((S.meta.seq?.[pre] || 0) >= n) return Promise.resolve();
+  S.meta.seq = { ...S.meta.seq, [pre]: n };
+  return saveMeta().catch(() => {});
+}
+// Amounts typed by hand: digits with up to 2 decimals (commas, spaces and ₹ allowed). Anything else → NaN.
+function parseAmount(v) {
+  const s = String(v ?? '').replace(/[,\s₹]/g, '');
+  return /^\d{1,10}(\.\d{1,2})?$/.test(s) ? Number(s) : NaN;
 }
 const PAY_MODES = ['Cash', 'UPI', 'Bank transfer', 'Cheque', 'Card'];
 
@@ -124,24 +137,31 @@ function docModel(c, e) {
   const clientGst = c.gst.find(g => GSTIN_RE.test(g.gstin))?.gstin || '';
   const firmLines = [...firmAddressLines(F), [F.phone, F.email].filter(Boolean).join(' · '),
     [F.pan && 'PAN ' + F.pan, firmGst && 'GSTIN ' + firmGst].filter(Boolean).join(' · ')].map(s => s.trim()).filter(Boolean);
-  const toLines = [...(c.address || '').split('\n'), [c.pan && 'PAN ' + c.pan, clientGst && 'GSTIN ' + clientGst].filter(Boolean).join(' · ')]
-    .map(s => s.trim()).filter(Boolean);
+  // The client's state decides CGST + SGST (same state as the firm) or IGST; for a client without a
+  // GSTIN it's the state saved with them, else one named in their address.
+  const toState = clientGst ? GST_STATES[clientGst.slice(0, 2)] : (c.state || stateInText(c.address));
+  const firmState = GST_STATES[firmGst.slice(0, 2)] || F.state || '';
+  const toLines = [...(c.address || '').split('\n'), !clientGst && toState && `State: ${toState}${STATE_CODE[toState] ? ` (${STATE_CODE[toState]})` : ''}`,
+    [c.pan && 'PAN ' + c.pan, clientGst && 'GSTIN ' + clientGst].filter(Boolean).join(' · ')]
+    .map(s => (s || '').trim()).filter(Boolean);
   const m = {
     title: bill ? (gst ? 'TAX INVOICE' : 'INVOICE') : 'RECEIPT', no: e.no || nextNo(e.kind, e.date), date: fmtDate(e.date),
     firm: { name: F.name || 'Your firm name', lines: firmLines }, toLabel: bill ? 'Bill to' : 'Received from', to: { name: c.name, lines: toLines },
     rows: [], totals: [], words: amountInWords(amt), extra: [], signFor: F.name, signatory: F.signatory || '', logo: logoOf(),
+    stateUnknown: !!gst && !toState,
   };
   if (bill) {
     const desc = e.desc || 'Professional fees';
     if (gst) {
       // Amounts in the ledger include GST at 18%. Same state → CGST + SGST, else IGST.
       const taxable = round2(amt / 1.18), tax = round2(amt - taxable);
-      const intra = !clientGst || clientGst.slice(0, 2) === firmGst.slice(0, 2);
+      const intra = toState ? toState === firmState : true;
       m.rows.push({ d: desc + (F.sac ? ` (SAC ${F.sac})` : ''), amt: taxable });
       m.totals.push({ l: 'Taxable value', amt: taxable });
       if (intra) { const half = round2(tax / 2); m.totals.push({ l: 'CGST @ 9%', amt: half }, { l: 'SGST @ 9%', amt: round2(tax - half) }); }
       else m.totals.push({ l: 'IGST @ 18%', amt: tax });
-      m.extra.push({ label: 'Place of supply', lines: [GST_STATES[(clientGst || firmGst).slice(0, 2)] || ''] });
+      const pos = toState || firmState;
+      m.extra.push({ label: 'GST details', lines: [`Place of supply: ${pos}${STATE_CODE[pos] ? ` (${STATE_CODE[pos]})` : ''}`, 'Tax payable on reverse charge: No'] });
     } else m.rows.push({ d: desc, amt });
     m.totals.push({ l: 'Total', amt, strong: true });
     const bal = balanceAfter(c, e);
@@ -179,10 +199,16 @@ function paperHTML(m) {
 // Character widths (per 1000 units of font size) for ASCII 32–126, from the standard font metrics.
 const HELV = '278 278 355 556 556 889 667 191 333 333 389 584 278 333 278 278 556 556 556 556 556 556 556 556 556 556 278 278 584 584 584 556 1015 667 667 722 722 667 611 778 722 278 500 667 556 833 722 778 667 778 722 667 611 722 667 944 667 667 611 278 278 278 469 556 333 556 556 500 556 556 278 556 556 222 222 500 222 833 556 556 556 556 333 500 278 556 500 722 500 500 500 334 260 334 584'.split(' ').map(Number);
 const HELVB = '278 333 474 556 556 889 722 238 333 333 389 584 278 333 278 278 556 556 556 556 556 556 556 556 556 556 333 333 584 584 584 611 975 722 722 722 722 667 611 778 722 278 556 722 611 833 722 778 667 778 722 667 611 722 667 944 667 667 611 333 278 333 584 556 333 556 611 556 611 556 333 611 611 278 278 556 278 889 611 611 611 611 389 556 333 611 556 778 556 556 500 389 280 389 584'.split(' ').map(Number);
-// Unicode → the fonts' WinAnsi encoding; anything else becomes "?".
+// Unicode → the fonts' WinAnsi encoding. Text the fonts can't show at all (Gujarati, Hindi and
+// other Indian scripts) is drawn by the browser into a picture instead — see makePDF.
 const WINANSI = { '€': 128, '‚': 130, '„': 132, '…': 133, '‘': 145, '’': 146, '“': 147, '”': 148, '•': 149, '–': 150, '—': 151, '™': 153 };
 const toAnsi = s => String(s ?? '').replace(/₹\s?/g, 'Rs. ').replace(/[^\x20-\x7e\xa0-\xff]/g, ch => WINANSI[ch] ? String.fromCharCode(WINANSI[ch]) : ch === '\n' ? ' ' : '?');
+const needsPicture = s => /[^\x20-\x7e\xa0-\xff\n₹€‚„…‘’“”•–—™]/.test(s);
+const PDF_FONT = (size, bold) => `${bold ? 'bold ' : ''}${size}px Helvetica, Arial, "Noto Sans", "Noto Sans Gujarati", "Noto Sans Devanagari", sans-serif`;
+let measureCtx;
 function textWidth(s, size, bold) {
+  if (needsPicture(s)) { measureCtx ||= document.createElement('canvas').getContext('2d'); measureCtx.font = PDF_FONT(size, bold); return measureCtx.measureText(s).width; }
+  s = toAnsi(s);
   const w = bold ? HELVB : HELV;
   let t = 0;
   for (const ch of s) { const i = ch.charCodeAt(0) - 32; t += i >= 0 && i < w.length ? w[i] : 556; }
@@ -190,7 +216,7 @@ function textWidth(s, size, bold) {
 }
 function wrapText(s, width, size, bold) {
   const out = [];
-  for (const para of String(s ?? '').split(/\r?\n/).map(toAnsi)) {
+  for (const para of String(s ?? '').split(/\r?\n/)) {
     let line = '';
     for (const word of para.split(/\s+/).filter(Boolean)) {
       const tryLine = line ? line + ' ' + word : word;
@@ -201,53 +227,75 @@ function wrapText(s, width, size, bold) {
   }
   return out;
 }
-function buildPDF(content, title, img) {
-  const W = 595.28, H = 841.89;
+// pages: each page's drawing commands; imgs: JPEGs {src, w, h} named Im1, Im2… in that order.
+function buildPDF(pages, title, imgs) {
+  const W = 595.28, H = 841.89, n = imgs.length;
   const pdfStr = s => '(' + s.replace(/[\\()]/g, '\\$&') + ')';
+  // 1 catalog, 2 page list, 3–4 fonts, 5 info, then the pictures, then a page + its content per page
+  const pageNo = i => 6 + n + i * 2;
+  const xobj = n ? ` /XObject << ${imgs.map((_, i) => `/Im${i + 1} ${6 + i} 0 R`).join(' ')} >>` : '';
   const objs = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >>${img ? ' /XObject << /Im1 8 0 R >>' : ''} >> /Contents 4 0 R >>`,
-    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    `<< /Type /Pages /Kids [${pages.map((_, i) => `${pageNo(i)} 0 R`).join(' ')}] /Count ${pages.length} >>`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
     `<< /Title ${pdfStr(toAnsi(title))} /Producer (Client Vault) >>`,
+    ...imgs.map(img => { // the JPEG goes in unchanged; atob gives its bytes as characters 0–255
+      const bin = atob(img.src.split(',')[1]);
+      return `<< /Type /XObject /Subtype /Image /Width ${img.w} /Height ${img.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${bin.length} >>\nstream\n${bin}\nendstream`;
+    }),
+    ...pages.flatMap((content, i) => [
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>${xobj} >> /Contents ${pageNo(i) + 1} 0 R >>`,
+      `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    ]),
   ];
-  if (img) { // the JPEG goes in unchanged; atob gives its bytes as characters 0–255
-    const bin = atob(img.src.split(',')[1]);
-    objs.push(`<< /Type /XObject /Subtype /Image /Width ${img.w} /Height ${img.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${bin.length} >>\nstream\n${bin}\nendstream`);
-  }
   let out = '%PDF-1.4\n%\xe2\xe3\xcf\xd3\n';
   const offsets = objs.map((o, i) => { const at = out.length; out += `${i + 1} 0 obj\n${o}\nendobj\n`; return at; });
   const xref = out.length;
   out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offsets.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
-  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 7 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return Uint8Array.from(out, ch => ch.charCodeAt(0)); // every character is below 256, so one byte each
 }
-// Draws the document on an A4 page. Positions are measured from the top of the page.
+// Draws the document on A4 pages (more pages when it doesn't fit). Positions are measured from
+// the top of the page.
 function makePDF(m) {
-  const H = 841.89, L = 48, R = 547, ops = [];
-  const rs = n => 'Rs. ' + money(n);
+  const H = 841.89, L = 48, R = 547, TOP = 56, BOTTOM = 790;
+  const pages = [[]], imgs = [];
+  let ops = pages[0];
+  const newPage = () => { ops = []; pages.push(ops); return TOP; };
+  const fit = (y, h) => y + h > BOTTOM ? newPage() : y; // keep a block together; start a new page if it won't fit
   const col = c => c.map(v => v.toFixed(3)).join(' ');
   const INK = [0.07, 0.07, 0.09], GREY = [0.42, 0.42, 0.45], ACCENT = [0.04, 0.4, 0.85], RULE = [0.85, 0.85, 0.87];
+  const image = (img, x, top, w, h) => { const i = imgs.push(img); ops.push(`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${(H - top - h).toFixed(2)} cm /Im${i} Do Q`); };
   const text = (x, y, s, { size = 10, bold = false, color = INK, align = 'left' } = {}) => {
-    s = toAnsi(s);
     const w = textWidth(s, size, bold), x0 = align === 'right' ? x - w : align === 'center' ? x - w / 2 : x;
+    if (needsPicture(s)) {
+      // Drawn 4× larger than printed so it stays sharp; the baseline lines up with the other text.
+      const k = 4, cv = document.createElement('canvas'), hpt = size * 1.45;
+      cv.width = Math.ceil((w + 2) * k); cv.height = Math.ceil(hpt * k);
+      const g = cv.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+      g.fillStyle = `rgb(${color.map(v => Math.round(v * 255)).join(',')})`; g.font = PDF_FONT(size * k, bold); g.textBaseline = 'alphabetic';
+      g.fillText(s, k, size * 1.08 * k);
+      image({ src: cv.toDataURL('image/jpeg', 0.92), w: cv.width, h: cv.height }, x0 - 1, y - size * 1.08, cv.width / k, cv.height / k);
+      return;
+    }
+    s = toAnsi(s);
     ops.push(`BT /${bold ? 'F2' : 'F1'} ${size} Tf ${col(color)} rg 1 0 0 1 ${x0.toFixed(2)} ${(H - y).toFixed(2)} Tm (${s.replace(/[\\()]/g, '\\$&')}) Tj ET`);
   };
   const rule = (y, x1 = L, x2 = R, color = RULE, w = 0.6) => ops.push(`${col(color)} RG ${w} w ${x1} ${(H - y).toFixed(2)} m ${x2} ${(H - y).toFixed(2)} l S`);
   const box = (x, y, w, h, color) => ops.push(`${col(color)} rg ${x} ${(H - y - h).toFixed(2)} ${w} ${h} re f`);
+  const lineH = size => size * 1.35;
   const block = (x, y, lines, size, width, opt = {}) => {
-    for (const l of lines) for (const w of wrapText(l, width, size, opt.bold)) { text(x, y, w, { size, ...opt }); y += size * 1.35; }
+    for (const l of lines) for (const w of wrapText(l, width, size, opt.bold)) { y = fit(y, lineH(size)); text(x, y, w, { size, ...opt }); y += lineH(size); }
     return y;
   };
 
-  // header: firm on the left, document title and number on the right
-  // logo top-left (up to 56pt tall, 130pt wide), firm details beside it
+  // header: logo (up to 56pt tall, 130pt wide) and firm on the left, document title and number on the right
   let fx = L, y = 64, logoBottom = 0;
   if (m.logo) {
     const k = Math.min(56 / m.logo.h, 130 / m.logo.w), lw = m.logo.w * k, lh = m.logo.h * k;
-    ops.push(`q ${lw.toFixed(2)} 0 0 ${lh.toFixed(2)} ${L} ${(H - 44 - lh).toFixed(2)} cm /Im1 Do Q`);
+    image(m.logo, L, 44, lw, lh);
     fx = L + lw + 14; logoBottom = 44 + lh;
   }
   const fw = 290 - (fx - L);
@@ -267,17 +315,23 @@ function makePDF(m) {
   y = block(L, y, m.to.lines, 9.5, 420, { color: GREY }) + 14;
 
   // table
-  box(L, y, R - L, 24, [0.95, 0.96, 0.98]);
-  text(L + 10, y + 15.5, 'Description', { size: 9, bold: true, color: GREY });
-  text(R - 10, y + 15.5, 'Amount (Rs.)', { size: 9, bold: true, color: GREY, align: 'right' });
-  y += 24;
+  const head = () => {
+    box(L, y, R - L, 24, [0.95, 0.96, 0.98]);
+    text(L + 10, y + 15.5, 'Description', { size: 9, bold: true, color: GREY });
+    text(R - 10, y + 15.5, 'Amount (Rs.)', { size: 9, bold: true, color: GREY, align: 'right' });
+    y += 24;
+  };
+  y = fit(y, 24 + 40); head();
   for (const r of m.rows) {
+    const ls = wrapText(r.d, 360, 10);
+    const yy = fit(y, ls.length * 14 + 10);
+    if (yy !== y) { y = yy; head(); }
     let ty = y + 18;
-    for (const w of wrapText(r.d, 360, 10)) { text(L + 10, ty, w, { size: 10 }); ty += 14; }
+    for (const w of ls) { text(L + 10, ty, w, { size: 10 }); ty += 14; }
     text(R - 10, y + 18, money(r.amt), { size: 10, align: 'right' });
     y = ty + 4; rule(y);
   }
-  y += 6;
+  y = fit(y, 6 + m.totals.length * 20 + 26) + 6;
   for (const t of m.totals) {
     y += t.strong ? 20 : 16;
     if (t.strong) rule(y - 13, 330, R, INK, 0.8);
@@ -287,19 +341,27 @@ function makePDF(m) {
   y += 26;
   y = block(L, y, [m.words], 9.5, R - L, { bold: true }) + 10;
 
-  // payment details, notes
+  // GST details, payment details, notes
   for (const x of m.extra) {
+    y = fit(y, 13 + lineH(9.5) * Math.min(3, x.lines.length));
     text(L, y, x.label.toUpperCase(), { size: 8, bold: true, color: GREY }); y += 13;
     y = block(L, y, x.lines, 9.5, R - L) + 10;
   }
 
-  // signature and footer
-  const sy = Math.max(y + 30, 700);
+  // signature: low on the last page, or on a new page if there's no room
+  let sy = y + 30;
+  if (sy + 64 > BOTTOM) sy = newPage() + 20;
+  else if (pages.length === 1) sy = Math.max(sy, 700);
   if (m.signFor) text(R, sy, 'For ' + m.signFor, { size: 10, bold: true, align: 'right' });
   if (m.signatory) text(R, sy + 46, m.signatory, { size: 9.5, align: 'right' });
   text(R, sy + 60, 'Authorised signatory', { size: 9, color: GREY, align: 'right' });
-  text(297.6, 815, 'This is a computer-generated document.', { size: 7.5, color: GREY, align: 'center' });
-  return buildPDF(ops.join('\n'), `${m.title} ${m.no}`, m.logo);
+  // footer on every page
+  pages.forEach((pg, i) => {
+    ops = pg;
+    const note = 'This is a computer-generated document.' + (pages.length > 1 ? `   Page ${i + 1} of ${pages.length}` : '');
+    text(297.6, 815, note, { size: 7.5, color: GREY, align: 'center' });
+  });
+  return buildPDF(pages.map(pg => pg.join('\n')), `${m.title} ${m.no}`, imgs);
 }
 
 // ---------- invoice / receipt screen ----------
@@ -309,6 +371,7 @@ function renderDoc(a) {
   const bill = e.kind === 'bill', F = firmInfo(), m = docModel(c, e);
   let html = bar({ left: backBtn('Fees', 'back'), title: bill ? 'Invoice' : 'Receipt' });
   if (!F.name || !firmHasAddress(F)) html += `<button class="banner" data-act="firm"><span class="grow">Add your firm’s name and address so they appear on ${bill ? 'invoices' : 'receipts'}.</span><b class="bbtn">Set up</b></button>`;
+  if (m.stateUnknown) html += `<button class="banner" data-act="editc"><span class="grow">Add ${esc(c.name)}’s state, so GST is split correctly (CGST + SGST or IGST).</span><b class="bbtn">Add</b></button>`;
   html += `<div class="paper" aria-label="${esc(m.title)} preview">${paperHTML(m)}</div>`;
   html += `<div class="pad"><button class="btn primary" data-act="share">Share PDF</button></div>`;
   html += `<div class="group" style="margin-top:16px">
@@ -316,17 +379,18 @@ function renderDoc(a) {
     <button class="row link" data-act="dl">Download PDF</button>
     <button class="row" data-act="firm"><span class="grow">Firm details</span><span class="chev">${I.chev}</span></button></div>`;
   if (!e.no) html += `<p class="foot">Number ${esc(m.no)} is given to this ${bill ? 'invoice' : 'receipt'} when you first share or download it.</p>`;
-  html += `<div class="group"><button class="row danger" data-act="del">Delete ${bill ? 'bill' : 'payment'}</button></div>`;
+  html += `<div class="group"><button class="row danger" data-act="del">Delete ${bill ? 'invoice' : 'payment'}</button></div>`;
   app.innerHTML = html;
   ACT.back = backTo;
   ACT.firm = () => go('firm', { back: a });
+  ACT.editc = () => go('edit', c.id);
   // Builds the file right away (sharing must start straight from the tap) and saves the number
   // in the background the first time.
   const file = () => {
     if (!e.no) {
       const no = m.no;
       e = { ...e, no };
-      updateClient(c, d => { const x = d.fees.find(y => y.id === e.id); if (x) x.no = no; }).then(d => { c = d; }, er => toast(errText(er)));
+      updateClient(c, d => { const x = d.fees.find(y => y.id === e.id); if (x) x.no = no; }).then(d => { c = d; return noteNo(no); }, er => toast(errText(er)));
     }
     return new File([makePDF(docModel(c, e))], docName(c, m), { type: 'application/pdf' });
   };
@@ -355,7 +419,8 @@ function renderDoc(a) {
     openWhatsApp(c, msg());
   };
   ACT.del = async () => {
-    if (!confirm(`Delete this ${bill ? 'bill' : 'payment'} of ${inr(e.amt)}?${e.no ? ` Its number ${e.no} won’t be reused automatically.` : ''}`)) return;
+    if (!confirm(`Delete this ${bill ? 'invoice' : 'payment'} of ${inr(e.amt)}?${e.no ? ` Its number ${e.no} won’t be given to another ${bill ? 'invoice' : 'receipt'}.` : ''}`)) return;
+    if (e.no) await noteNo(e.no);
     try {
       await updateClient(c, d => {
         d.fees = d.fees.filter(x => x.id !== e.id);
@@ -387,7 +452,7 @@ function renderFirm(a = {}) {
     ${fld('addr1', 'Address line 1', 'Office / building, street')}
     ${fld('addr2', 'Address line 2', 'Area, landmark (optional)')}
     ${fld('city', 'City', 'e.g. Ahmedabad')}
-    <label class="row"><span class="grow">State</span><select class="plain" id="f_state"><option value="">Choose</option>${STATE_NAMES.map(n => `<option${n === F.state ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+    <label class="row"><span class="grow">State</span><select class="plain" id="f_state"><option value="">Choose</option>${STATES.map(n => `<option${n === F.state ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
     ${fld('pin', 'PIN code', '6 digits', { num: 6 })}
   </div>
   <div class="group-h">GST on fees</div><div class="group">
@@ -446,10 +511,29 @@ function renderFirm(a = {}) {
     if (info.accNo && RULES.bankAcc(info.accNo)) return bad('accNo', RULES.bankAcc(info.accNo).msg);
     if (info.ifsc && RULES.ifsc(info.ifsc)) return bad('ifsc', RULES.ifsc(info.ifsc).msg);
     if (info.upi && !/^[\w.\-]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/.test(info.upi)) return bad('upi', 'UPI ID looks like name@bank');
-    if (info.pan && !PAN_RE.test(info.pan)) return toast('PAN is 5 letters, 4 digits, 1 letter');
-    if (info.gstin && (!GSTIN_RE.test(info.gstin) || gstinCheckDigit(info.gstin) !== info.gstin[14])) return toast('That GSTIN isn’t valid — check for a typo');
-    if (gstOn && !info.gstin) return toast('Add your GSTIN to charge GST on invoices');
-    if (info.invPrefix === info.rcptPrefix) return toast('Use different prefixes for invoices and receipts');
+    if (info.email && RULES.email(info.email)) return bad('email', 'Enter a valid email address');
+    if (info.phone) {
+      const d = info.phone.replace(/\D/g, '').replace(/^(?:91|0)(?=\d{10}$)/, '');
+      if (d.length !== 10) return bad('phone', 'Phone number: 10 digits (add the STD code for a landline)');
+    }
+    if (info.pan && !PAN_RE.test(info.pan)) return bad('pan', 'PAN is 5 letters, 4 digits, 1 letter');
+    if (info.gstin) {
+      if (!GSTIN_RE.test(info.gstin) || gstinCheckDigit(info.gstin) !== info.gstin[14]) return bad('gstin', 'That GSTIN isn’t valid — check for a typo');
+      if (info.gstin[13] !== 'Z') return bad('gstin', 'Enter your firm’s regular GSTIN (the 14th character is Z)');
+      const gPan = info.gstin.slice(2, 12), gState = GST_STATES[info.gstin.slice(0, 2)];
+      if (info.pan && info.pan !== gPan) return bad('gstin', `This GSTIN is for PAN ${gPan}, not your PAN ${info.pan}`);
+      if (!info.pan) info.pan = gPan;
+      if (STATE_CODE[gState]) {
+        if (info.state && info.state !== gState) return bad('state', `Your GSTIN is registered in ${gState} — choose ${gState} as the state`);
+        info.state = gState;
+      }
+    }
+    if (gstOn && !info.gstin) return bad('gstin', 'Add your GSTIN to charge GST on invoices');
+    if (info.sac && !/^99\d{4}$/.test(info.sac)) return bad('sac', 'SAC codes for services are 6 digits starting with 99 (e.g. 998222)');
+    // GST invoice numbers: at most 16 characters, only letters, digits, - and /.
+    if (!/^[A-Z0-9-]{1,3}$/.test(info.invPrefix)) return bad('invPrefix', 'Invoice prefix: up to 3 letters or digits, so numbers stay within GST’s 16-character limit');
+    if (!/^[A-Z0-9-]{1,8}$/.test(info.rcptPrefix)) return bad('rcptPrefix', 'Receipt prefix: up to 8 letters or digits');
+    if (info.invPrefix === info.rcptPrefix) return bad('rcptPrefix', 'Use different prefixes for invoices and receipts');
     const prev = { firmInfo: S.meta.firmInfo, firm: S.meta.firm };
     S.meta.firmInfo = info; S.meta.firm = v('name');
     b.disabled = true;

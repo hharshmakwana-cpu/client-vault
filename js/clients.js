@@ -28,7 +28,9 @@ function renderList() {
   if (!banner && BIO_OK && !bioRecord() && settings.bioOffer) banner = bioPending
     ? `<div class="banner info"><span class="grow">Almost done — confirm ${esc(BIO)} once more.</span><button class="bbtn" data-act="bioOn">Confirm</button></div>`
     : `<div class="banner info"><span class="grow">Unlock faster with ${esc(BIO)}.</span><button class="bbtn" data-act="bioOn">Turn on</button><button class="bx" data-act="bioNo" aria-label="Dismiss">×</button></div>`;
+  const logo = logoOf();
   app.innerHTML = bar({
+    left: logo || S.meta.firm ? `<button class="mini-brand" data-act="firmd" aria-label="Firm details">${logo ? logoImg(logo, '') : ''}<span>${esc(S.meta.firm || '')}</span></button>` : '',
     title: 'Clients', big: true,
     right: `<button class="nav-btn" data-act="add" aria-label="Add client">${I.plus}</button>`,
   }) + `
@@ -47,6 +49,7 @@ function renderList() {
   ACT.filter = t => { F = t.dataset.f; drawList(); };
   ACT.sync = () => sync();
   ACT.bioOn = () => bioTurnOn(() => renderList());
+  ACT.firmd = () => go('firm', { from: 'list' });
   ACT.csv = () => pickCsvFile();
   ACT.sample = () => sampleCSV();
   bindGuide();

@@ -10,7 +10,7 @@ function renderSettings() {
   app.innerHTML = bar({ title: 'Settings', big: true }) + `<h1 class="large" data-big>Settings</h1>` + `
     <div class="group-h">Your practice</div>
     <div class="group">
-      <button class="row" data-act="firm"><span class="grow">Firm details<small>Name, address, GST and bank details for invoices</small></span><span class="chev">${I.chev}</span></button>
+      <button class="row" data-act="firm">${logoOf() ? `<span class="logo-box has">${logoImg(logoOf(), 'logo-thumb')}</span>` : ''}<span class="grow">Firm details<small>Name, address, GST and bank details for invoices</small></span><span class="chev">${I.chev}</span></button>
       <button class="row" data-act="work"><span class="grow">Work you handle<small>${esc(SERVICES.filter(x => handles(x[0])).map(x => x[1]).join(', '))}</small></span><span class="chev">${I.chev}</span></button>
       <button class="row" data-act="templates"><span class="grow">WhatsApp messages</span><span class="chev">${I.chev}</span></button>
     </div>

@@ -5,6 +5,37 @@
 
 // ---------- firm details ----------
 const firmInfo = () => ({ invPrefix: 'INV', rcptPrefix: 'RCPT', terms: 'Thank you for your business.', ...S.meta.firmInfo, name: S.meta.firm || '' });
+// The firm's logo: a JPEG (data URL) with its pixel size, made from the picture the user picked.
+// Kept as JPEG so the PDF can embed it as-is. Anything else (e.g. from an odd backup) is ignored.
+const LOGO_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/;
+const logoOf = () => { const l = S.meta.firmInfo?.logo; return l && LOGO_RE.test(l.src) && l.w > 0 && l.h > 0 ? l : null; };
+const logoImg = (l, cls) => l && LOGO_RE.test(l.src) ? `<img class="${cls}" src="${l.src}" alt="">` : '';
+// Shrinks the picked image (max 480×240), puts it on white (logos with transparency) and makes a JPEG.
+function readLogo(file) {
+  return new Promise((resolve, reject) => {
+    if (!/^image\//.test(file.type)) return reject(new Error('Choose a picture (PNG or JPG)'));
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('Couldn’t read that picture'));
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Couldn’t open that picture — try a PNG or JPG'));
+      img.onload = () => {
+        const k = Math.min(1, 480 / img.naturalWidth, 240 / img.naturalHeight);
+        const w = Math.max(1, Math.round(img.naturalWidth * k)), h = Math.max(1, Math.round(img.naturalHeight * k));
+        const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+        resolve({ src: cv.toDataURL('image/jpeg', 0.9), w, h });
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+// Firm name + logo are also kept on this device (not secret) to show on the unlock screen.
+function cacheBrand() {
+  const F = firmInfo(), l = logoOf();
+  writeLS('cv-brand', F.name || l ? { name: F.name, logo: l?.src || '' } : null);
+}
 const fyLabel = s => `${s}-${String(s + 1).slice(2)}`;
 // Numbers run per financial year, e.g. INV/2026-27/001, and continue from the highest one in use.
 function nextNo(kind, date) {
@@ -56,7 +87,7 @@ function docModel(c, e) {
   const m = {
     title: bill ? (gst ? 'TAX INVOICE' : 'INVOICE') : 'RECEIPT', no: e.no || nextNo(e.kind, e.date), date: fmtDate(e.date),
     firm: { name: F.name || 'Your firm name', lines: firmLines }, toLabel: bill ? 'Bill to' : 'Received from', to: { name: c.name, lines: toLines },
-    rows: [], totals: [], words: amountInWords(amt), extra: [], signFor: F.name, signatory: F.signatory || '',
+    rows: [], totals: [], words: amountInWords(amt), extra: [], signFor: F.name, signatory: F.signatory || '', logo: logoOf(),
   };
   if (bill) {
     const desc = e.desc || 'Professional fees';
@@ -91,7 +122,7 @@ const docName = (c, m) => `${m.no.replace(/[^\w-]+/g, '-')}-${(c.name || 'client
 // ---------- on-screen preview ----------
 function paperHTML(m) {
   const lines = a => a.map(esc).join('<br>');
-  return `<div class="pp-head"><div class="pp-from"><b class="pp-firm">${esc(m.firm.name)}</b><small>${lines(m.firm.lines)}</small></div>
+  return `<div class="pp-head">${logoImg(m.logo, 'pp-logo')}<div class="pp-from"><b class="pp-firm">${esc(m.firm.name)}</b><small>${lines(m.firm.lines)}</small></div>
     <div class="pp-r"><b class="pp-title">${esc(m.title)}</b><small>No. ${esc(m.no)}<br>Date ${esc(m.date)}</small></div></div>
   <div class="pp-to"><span class="pp-l">${esc(m.toLabel)}</span><b>${esc(m.to.name)}</b><small>${lines(m.to.lines)}</small></div>
   <table class="pp-t"><thead><tr><th>Description</th><th>Amount (₹)</th></tr></thead>
@@ -128,23 +159,27 @@ function wrapText(s, width, size, bold) {
   }
   return out;
 }
-function buildPDF(content, title) {
+function buildPDF(content, title, img) {
   const W = 595.28, H = 841.89;
   const pdfStr = s => '(' + s.replace(/[\\()]/g, '\\$&') + ')';
   const objs = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>`,
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >>${img ? ' /XObject << /Im1 8 0 R >>' : ''} >> /Contents 4 0 R >>`,
     `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
     `<< /Title ${pdfStr(toAnsi(title))} /Producer (Client Vault) >>`,
   ];
+  if (img) { // the JPEG goes in unchanged; atob gives its bytes as characters 0–255
+    const bin = atob(img.src.split(',')[1]);
+    objs.push(`<< /Type /XObject /Subtype /Image /Width ${img.w} /Height ${img.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${bin.length} >>\nstream\n${bin}\nendstream`);
+  }
   let out = '%PDF-1.4\n%\xe2\xe3\xcf\xd3\n';
   const offsets = objs.map((o, i) => { const at = out.length; out += `${i + 1} 0 obj\n${o}\nendobj\n`; return at; });
   const xref = out.length;
   out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offsets.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
-  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info ${objs.length} 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 7 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return Uint8Array.from(out, ch => ch.charCodeAt(0)); // every character is below 256, so one byte each
 }
 // Draws the document on an A4 page. Positions are measured from the top of the page.
@@ -166,9 +201,16 @@ function makePDF(m) {
   };
 
   // header: firm on the left, document title and number on the right
-  let y = 64;
-  for (const w of wrapText(m.firm.name, 290, 17, true)) { text(L, y, w, { size: 17, bold: true }); y += 21; }
-  y = block(L, y, m.firm.lines, 9, 290, { color: GREY });
+  // logo top-left (up to 56pt tall, 130pt wide), firm details beside it
+  let fx = L, y = 64, logoBottom = 0;
+  if (m.logo) {
+    const k = Math.min(56 / m.logo.h, 130 / m.logo.w), lw = m.logo.w * k, lh = m.logo.h * k;
+    ops.push(`q ${lw.toFixed(2)} 0 0 ${lh.toFixed(2)} ${L} ${(H - 44 - lh).toFixed(2)} cm /Im1 Do Q`);
+    fx = L + lw + 14; logoBottom = 44 + lh;
+  }
+  const fw = 290 - (fx - L);
+  for (const w of wrapText(m.firm.name, fw, 17, true)) { text(fx, y, w, { size: 17, bold: true }); y += 21; }
+  y = Math.max(block(fx, y, m.firm.lines, 9, fw, { color: GREY }), logoBottom + 8);
   let ry = 64;
   text(R, ry, m.title, { size: 19, bold: true, color: ACCENT, align: 'right' }); ry += 20;
   text(R, ry, 'No. ' + m.no, { size: 10, align: 'right' }); ry += 14;
@@ -215,7 +257,7 @@ function makePDF(m) {
   if (m.signatory) text(R, sy + 46, m.signatory, { size: 9.5, align: 'right' });
   text(R, sy + 60, 'Authorised signatory', { size: 9, color: GREY, align: 'right' });
   text(297.6, 815, 'This is a computer-generated document.', { size: 7.5, color: GREY, align: 'center' });
-  return buildPDF(ops.join('\n'), `${m.title} ${m.no}`);
+  return buildPDF(ops.join('\n'), `${m.title} ${m.no}`, m.logo);
 }
 
 // ---------- invoice / receipt screen ----------
@@ -290,6 +332,8 @@ function renderFirm(a = {}) {
     : `<input class="finput${o.up ? ' up' : ''}" id="f_${k}" value="${esc(F[k] || '')}" placeholder="${esc(ph)}"${o.type ? ` type="${o.type}"` : ''}${o.up ? ' autocapitalize="characters"' : ''} autocomplete="off" autocorrect="off" spellcheck="false">`}</label>`;
   let html = bar({ left: `<button class="nav-btn" data-act="back">Cancel</button>`, title: 'Firm details', right: `<button class="nav-btn strong" data-act="save">Done</button>` });
   html += `<form id="ff" autocomplete="off"><div class="group-h">Your firm</div><div class="group">
+    <div class="row logo-row"><span class="logo-box" id="logoBox"></span><span class="grow">Logo<small>PNG or JPG. Printed on invoices and receipts, and shown in the app.</small></span>
+      <button type="button" class="linkbtn" data-act="logo" id="logoBtn"></button><button type="button" class="linkbtn danger" data-act="logoDel" id="logoDel" style="color:var(--danger)">Remove</button></div>
     ${fld('name', 'Firm name', 'e.g. Makwana & Associates')}
     ${fld('address', 'Address', 'Office address with PIN code', { area: true })}
     ${fld('phone', 'Phone', 'Optional', { type: 'tel' })}
@@ -315,14 +359,33 @@ function renderFirm(a = {}) {
   <p class="foot">Numbers look like ${esc(F.invPrefix)}/${fyLabel(fyStart(todayStr()))}/001 and start again at 001 each financial year.</p></form>`;
   app.innerHTML = html;
   $('#ff').onsubmit = e => e.preventDefault();
-  let gstOn = !!F.gstOn;
+  let gstOn = !!F.gstOn, logo = logoOf();
+  const showLogo = () => {
+    $('#logoBox').innerHTML = logo ? logoImg(logo, 'logo-thumb') : 'Logo';
+    $('#logoBox').classList.toggle('has', !!logo);
+    $('#logoBtn').textContent = logo ? 'Change' : 'Add';
+    $('#logoDel').hidden = !logo;
+  };
+  showLogo();
+  ACT.logo = () => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/png,image/jpeg,image/webp';
+    input.onchange = async () => {
+      suppressLock = false;
+      const f = input.files[0]; if (!f) return;
+      if (f.size > 8e6) return toast('That picture is too large — use one under 8 MB');
+      try { logo = await readLogo(f); showLogo(); toast('Logo added — tap Done to save'); } catch (e) { toast(e.message); }
+    };
+    suppressLock = true; input.click();
+  };
+  ACT.logoDel = () => { logo = null; showLogo(); };
   ACT.back = backTo;
   ACT.gston = t => { gstOn = !gstOn; t.setAttribute('aria-checked', gstOn); };
   ACT.save = async b => {
     const v = k => $('#f_' + k).value.trim();
     const info = { address: v('address'), phone: v('phone'), email: v('email'), pan: NORM.id(v('pan')), gstin: NORM.id(v('gstin')), signatory: v('signatory'),
       gstOn, sac: v('sac'), bank: v('bank'), upi: v('upi'), invPrefix: NORM.id(v('invPrefix')).replace(/\//g, '') || 'INV',
-      rcptPrefix: NORM.id(v('rcptPrefix')).replace(/\//g, '') || 'RCPT', terms: v('terms') };
+      rcptPrefix: NORM.id(v('rcptPrefix')).replace(/\//g, '') || 'RCPT', terms: v('terms'), ...(logo ? { logo } : {}) };
     if (info.pan && !PAN_RE.test(info.pan)) return toast('PAN is 5 letters, 4 digits, 1 letter');
     if (info.gstin && (!GSTIN_RE.test(info.gstin) || gstinCheckDigit(info.gstin) !== info.gstin[14])) return toast('That GSTIN isn’t valid — check for a typo');
     if (gstOn && !info.gstin) return toast('Add your GSTIN to charge GST on invoices');
@@ -330,7 +393,7 @@ function renderFirm(a = {}) {
     const prev = { firmInfo: S.meta.firmInfo, firm: S.meta.firm };
     S.meta.firmInfo = info; S.meta.firm = v('name');
     b.disabled = true;
-    try { await saveMeta(); toast('Saved'); backTo(); }
+    try { await saveMeta(); cacheBrand(); updateTabs(); toast('Saved'); backTo(); }
     catch (e) { Object.assign(S.meta, prev); b.disabled = false; toast(errText(e)); }
   };
 }

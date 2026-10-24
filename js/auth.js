@@ -2,9 +2,11 @@
 // Entry screens: sign in, password reset, create vault, unlock.
 
 // ---------- entry screens ----------
-function lockScreen(title, sub, inner) {
+// logo: the firm's logo (data URL) to show instead of the lock icon.
+function lockScreen(title, sub, inner, logo) {
   ACT = {}; cur = { v: null }; updateTabs();
-  app.innerHTML = `<main class="lock"><div class="lock-icon">${I.lock}</div><h1>${esc(title)}</h1><p class="sub">${sub}</p>${inner}</main>`;
+  const icon = logo && LOGO_RE.test(logo) ? `<div class="lock-icon brand-logo"><img src="${logo}" alt=""></div>` : `<div class="lock-icon">${I.lock}</div>`;
+  app.innerHTML = `<main class="lock">${icon}<h1>${esc(title)}</h1><p class="sub">${sub}</p>${inner}</main>`;
 }
 function renderLoading(msg) {
   ACT = {}; cur = { v: null }; updateTabs();
@@ -155,15 +157,15 @@ async function finishUnlock(raw) {
 
 let fails = +readLS('cv-fails') || 0, until = +readLS('cv-until') || 0;
 function renderUnlock(mode) {
-  const rec = bioRecord();
-  const who = DB.demo ? 'Demo mode' : esc(DB.user.email);
+  const rec = bioRecord(), brand = readLS('cv-brand') || {};
+  const who = DB.demo ? 'Demo mode' : esc(DB.user.email), title = brand.name || 'Client Vault';
   if (rec && mode !== 'pw') {
-    lockScreen('Client Vault', who, `
+    lockScreen(title, who, `
       <div class="stack" style="text-align:center">
         <button class="facebtn" data-act="bio"><span class="ring">${I.face}</span>Unlock with ${esc(BIO)}</button>
         <button class="btn plainbtn" data-act="pw">Use master password</button>
         <p class="err" id="err" role="alert"></p>
-      </div>`);
+      </div>`, brand.logo);
     ACT.pw = () => renderUnlock('pw');
     ACT.bio = async () => {
       let raw;
@@ -177,13 +179,13 @@ function renderUnlock(mode) {
     };
     return;
   }
-  lockScreen('Client Vault', who, `
+  lockScreen(title, who, `
     <form id="f" class="stack" autocomplete="off">
       <input class="field" id="pw" type="password" placeholder="Master password" autocomplete="current-password" enterkeyhint="go">
       <button class="btn primary" id="go" type="submit">Unlock</button>
       ${rec ? `<button class="btn plainbtn" type="button" data-act="bioback">Use ${esc(BIO)} instead</button>` : ''}
       <p class="err" id="err" role="alert"></p>
-    </form>`);
+    </form>`, brand.logo);
   ACT.bioback = () => renderUnlock();
   const pw = $('#pw'), btn = $('#go'), er = $('#err');
   const wait = () => {

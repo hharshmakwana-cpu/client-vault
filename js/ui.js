@@ -218,6 +218,10 @@ function updateTabs() {
   document.body.classList.toggle('in-form', on && FORMS.has(cur.v));
   if (!on) return;
   if (TABS.has(cur.v)) TAB = cur.v;
+  const logo = logoOf();
+  $('#brandI').innerHTML = logo ? logoImg(logo, '') : I.lockSm;
+  $('#brandI').classList.toggle('has-logo', !!logo);
+  $('#brandName').textContent = S.meta.firm || 'Client Vault';
   $$('[data-tab]', tabsEl).forEach(b => { const here = b.dataset.tab === TAB; b.classList.toggle('on', here); here ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'); });
   const n = dueLists().overdue.length, badge = $('[data-tab="due"] .tbadge', tabsEl);
   badge.hidden = !n; badge.textContent = n > 99 ? '99+' : n;

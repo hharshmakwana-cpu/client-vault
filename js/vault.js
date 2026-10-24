@@ -5,6 +5,7 @@
 async function applyMeta() {
   S.meta = S.vault.metaCt ? await decJSON(S.key, { iv: S.vault.metaIv, ct: S.vault.metaCt }) : {};
   S.meta.customFields = Array.isArray(S.meta.customFields) ? S.meta.customFields : [];
+  cacheBrand();
 }
 // Brings records saved by older versions of the app up to the current shape.
 function tidy(c) {
@@ -220,7 +221,7 @@ function lock() {
 // A session that expired (msg set) keeps waiting changes, so they upload after signing in again.
 async function signOut(msg) {
   if (DB.user) { await store.del(cacheKey()).catch(() => {}); writeLS(bioKey(), null); if (!msg) await store.del(outboxKey()).catch(() => {}); }
-  OUT = new Map();
+  OUT = new Map(); writeLS('cv-brand', null);
   S = null; PV = null;
   DB.signOut();
   renderSignIn(msg);

@@ -167,16 +167,30 @@ function renderUnlock(mode) {
         <p class="err" id="err" role="alert"></p>
       </div>`, brand.logo);
     ACT.pw = () => renderUnlock('pw');
+    let busy = false;
     ACT.bio = async () => {
+      if (busy) return;
+      busy = true;
       let raw;
       try { raw = await bioUnlockRaw(); }
       catch (e) {
-        if (e.name === 'NotAllowedError' || e.name === 'AbortError') return;
+        busy = false;
+        if (e.name === 'NotAllowedError' || e.name === 'AbortError') return; // cancelled: the buttons stay for another try
         if (e.name === 'OperationError') writeLS(bioKey(), null);
         return renderUnlockMsg(`${BIO} didn’t work this time. Use your master password.`);
       }
       finishUnlock(raw);
     };
+    // Ask for Face ID straight away, once the app is on screen. If the browser wants a tap
+    // first, or the person cancels, the button above is still there.
+    const screen = $('.facebtn');
+    const auto = () => {
+      if (!document.body.contains(screen)) return document.removeEventListener('visibilitychange', auto);
+      if (document.hidden) return;
+      document.removeEventListener('visibilitychange', auto);
+      setTimeout(() => { if (document.body.contains(screen) && !document.hidden) ACT.bio(); }, 350);
+    };
+    if (document.hidden) document.addEventListener('visibilitychange', auto); else auto();
     return;
   }
   lockScreen(title, who, `

@@ -1,6 +1,7 @@
 // Offline support. Bump CACHE when you change any file.
-const CACHE = 'client-vault-v9';
-const ASSETS = ['./', './index.html', './app.js', './config.js', './manifest.json',
+const CACHE = 'client-vault-v10';
+const ASSETS = ['./', './index.html', './config.js', './manifest.json',
+  './js/core.js', './js/backend.js', './js/data.js', './js/ui.js', './js/vault.js', './js/auth.js', './js/clients.js', './js/settings.js', './js/compliance.js', './js/practice.js', './js/invoice.js', './js/csv.js', './js/dashboard.js', './js/main.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

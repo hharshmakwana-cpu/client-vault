@@ -236,13 +236,99 @@ button.row:disabled{opacity:.45}
 .errtext{color:var(--danger)!important}.warntext{color:var(--warn)!important}
 a.btn{display:block;text-decoration:none}
 
+/* ---- invoice / receipt preview: always looks like paper, also in dark mode ---- */
+.paper{background:#fff;color:#16161a;margin:0 16px 20px;padding:22px 20px 18px;border-radius:14px;font-size:12px;line-height:1.45;box-shadow:0 1px 2px rgba(0,0,0,.06),0 12px 32px rgba(15,23,42,.1);-webkit-user-select:text;user-select:text;letter-spacing:0}
+.paper small{display:block;color:#6b6b72;font-size:11px}
+.paper .pp-l{display:block;font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6b6b72;margin-bottom:3px}
+.pp-head{display:flex;justify-content:space-between;gap:12px;padding-bottom:12px;border-bottom:1.5px solid #0a66d8;margin-bottom:14px}
+.pp-from{min-width:0}
+.pp-firm{display:block;font-size:15px;word-break:break-word}
+.pp-r{text-align:right;flex:none}
+.pp-title{display:block;color:#0a66d8;font-size:15px;letter-spacing:.02em}
+.pp-to{margin-bottom:14px}
+.pp-to b{display:block;font-size:13px}
+.pp-t{width:100%;border-collapse:collapse;margin-bottom:10px;font-variant-numeric:tabular-nums}
+.pp-t th{background:#f2f4f8;color:#6b6b72;font-size:10px;font-weight:700;text-align:left;padding:7px 8px}
+.pp-t th:last-child,.pp-t td:last-child{text-align:right;white-space:nowrap}
+.pp-t tbody td{padding:9px 8px;border-bottom:1px solid #e6e6ea;vertical-align:top}
+.pp-t tfoot td{padding:4px 8px;color:#6b6b72}
+.pp-t tfoot td:first-child{text-align:right}
+.pp-t tfoot tr.strong td{color:#16161a;font-weight:700;font-size:13px;border-top:1px solid #16161a;padding-top:7px}
+.pp-words{font-weight:600;margin:0 0 12px}
+.pp-x{margin-bottom:10px}
+.pp-sign{text-align:right;font-weight:600;margin-top:22px}
+.pp-sign span{display:block;font-weight:400;color:#6b6b72;margin-top:26px;font-size:11px}
+
+/* ---- tab bar (phone) / sidebar (wide screens) ---- */
+.tabs{display:none}
+body.unlocked:not(.in-form) .tabs{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:20;justify-content:space-around;padding:6px 8px calc(4px + env(safe-area-inset-bottom));background:var(--bg);background:color-mix(in srgb,var(--bg) 82%,transparent);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);border-top:.5px solid var(--sep)}
+body.cover .tabs{visibility:hidden}
+.tab{flex:1;max-width:120px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:2px 0;color:var(--sub);font-size:10.5px;font-weight:500;letter-spacing:0;transition:color .2s,transform .18s var(--ease)}
+.tab:active{transform:scale(.92)}
+.tab.on{color:var(--accent)}
+.tab svg{display:block}
+.ti{position:relative;display:block}
+.tbadge{position:absolute;top:-3px;left:17px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--danger);color:#fff;font-size:11px;font-weight:600;line-height:18px;text-align:center;font-variant-numeric:tabular-nums;box-shadow:0 0 0 2px var(--bg)}
+.side-only{display:none!important}
+body.unlocked:not(.in-form) #app{padding-bottom:calc(84px + env(safe-area-inset-bottom))}
+body.unlocked:not(.in-form) #toast{bottom:calc(76px + env(safe-area-inset-bottom))}
+
+/* wide screens: the tabs become a sidebar and stay put, content sits in a column beside it */
+@media (min-width:900px){
+  :root{--side:236px}
+  body.unlocked .tabs,body.unlocked:not(.in-form) .tabs{display:flex;flex-direction:column;justify-content:flex-start;gap:2px;position:fixed;top:0;bottom:0;left:0;right:auto;width:var(--side);padding:calc(18px + env(safe-area-inset-top)) 12px 18px;background:var(--card);border-top:0;border-right:.5px solid var(--sep);-webkit-backdrop-filter:none;backdrop-filter:none}
+  body.unlocked .side-only{display:flex!important}
+  .brand{align-items:center;gap:10px;font-weight:700;font-size:19px;letter-spacing:-.02em;padding:6px 10px 18px}
+  .brand-i{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:#fff;background:linear-gradient(160deg,#4f9bff,#0a46be)}
+  .tab{flex:none;max-width:none;flex-direction:row;gap:12px;padding:10px 12px;border-radius:10px;font-size:15px;color:var(--text)}
+  .tab svg{width:22px;height:22px;color:var(--sub)}
+  .tab.on{background:var(--accent-soft);color:var(--accent)}
+  .tab.on svg{color:var(--accent)}
+  .tab:active{transform:none}
+  .tbadge{position:static;display:inline-block;margin-left:auto;box-shadow:none;order:2}
+  .tab .ti{display:contents}
+  .lockbtn{margin-top:auto;color:var(--sub)}
+  body.in-form .tabs .tab{opacity:.45;pointer-events:none}
+  body.unlocked #app,body.unlocked .layer-in{margin-left:max(var(--side),calc(var(--side) + (100% - var(--side) - 680px) / 2));margin-right:0}
+  body.unlocked #app{padding-bottom:48px}
+  body.unlocked #toast,body.unlocked:not(.in-form) #toast{left:calc(50% + var(--side) / 2);bottom:28px}
+  .tiles.two{grid-template-columns:repeat(4,1fr)}
+}
+@media (hover:hover) and (pointer:fine){
+  button.row:hover,.qa a:hover,.chip:not(.on):hover{background-color:var(--press)}
+  button.tile:hover{box-shadow:var(--shadow),0 0 0 1.5px var(--accent-soft)}
+  .tab:not(.on):hover{background:var(--fill)}
+  .nav-btn:hover{opacity:.7}
+}
+
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 </style>
 </head>
 <body>
 <div id="app"></div>
+<nav id="tabs" class="tabs" aria-label="Main">
+  <div class="brand side-only" aria-hidden="true"><span class="brand-i"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="5" y="11" width="14" height="9" rx="2.2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></svg></span>Client Vault</div>
+  <button class="tab" data-tab="list"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 19.5c.8-3.4 3.4-5.5 6.5-5.5s5.7 2.1 6.5 5.5"/><path d="M15.5 5.3a3.5 3.5 0 0 1 0 6.4M18 14.4c1.8.8 3 2.6 3.5 5.1"/></svg><span>Clients</span></button>
+  <button class="tab" data-tab="due"><span class="ti"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4" stroke-linejoin="round"/></svg><b class="tbadge" hidden></b></span><span>Due dates</span></button>
+  <button class="tab" data-tab="dash"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Overview</span></button>
+  <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
+  <button class="tab side-only lockbtn" data-tab="lock"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2.2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></svg><span>Lock now</span></button>
+</nav>
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="config.js"></script>
-<script src="app.js"></script>
+<script src="js/core.js"></script>
+<script src="js/backend.js"></script>
+<script src="js/data.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/vault.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/clients.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/compliance.js"></script>
+<script src="js/practice.js"></script>
+<script src="js/invoice.js"></script>
+<script src="js/csv.js"></script>
+<script src="js/dashboard.js"></script>
+<script src="js/main.js"></script>
 </body>
 </html>

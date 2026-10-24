@@ -181,16 +181,16 @@ function renderUnlock(mode) {
       }
       finishUnlock(raw);
     };
-    // Ask for Face ID straight away, once the app is on screen. If the browser wants a tap
-    // first, or the person cancels, the button above is still there.
-    const screen = $('.facebtn');
-    const auto = () => {
-      if (!document.body.contains(screen)) return document.removeEventListener('visibilitychange', auto);
-      if (document.hidden) return;
-      document.removeEventListener('visibilitychange', auto);
-      setTimeout(() => { if (document.body.contains(screen) && !document.hidden) ACT.bio(); }, 350);
+    // Ask for Face ID by itself when the app is opened or comes back on screen. If the browser
+    // wants a tap first, or the person cancels, the button above is still there.
+    const screen = $('.facebtn'), ask = () => setTimeout(() => { if (document.body.contains(screen) && !document.hidden) ACT.bio(); }, 350);
+    const onShow = () => {
+      if (!document.body.contains(screen)) return document.removeEventListener('visibilitychange', onShow);
+      if (!document.hidden) ask();
     };
-    if (document.hidden) document.addEventListener('visibilitychange', auto); else auto();
+    document.addEventListener('visibilitychange', onShow);
+    if (bioAuto && !document.hidden) ask();
+    bioAuto = false;
     return;
   }
   lockScreen(title, who, `

@@ -203,15 +203,19 @@ document.addEventListener('visibilitychange', () => {
     hiddenAt = Date.now();
     if (suppressLock || Date.now() < graceUntil) return;
     document.body.classList.add('cover');
-    if (settings.lockAfter === 0) lock();
+    if (settings.lockAfter === 0) lock(true);
   } else {
     document.body.classList.remove('cover');
     if (suppressLock || Date.now() < graceUntil) { suppressLock = false; return; }
-    if (Date.now() - hiddenAt >= settings.lockAfter * 1000) lock();
+    if (Date.now() - hiddenAt >= settings.lockAfter * 1000) lock(true);
     else if (cur.v !== 'edit') sync();
   }
 });
-function lock() {
+// Face ID starts by itself only when the app is opened or brought back — not right after
+// "Lock now" or an idle lock while the screen is on, which would just ask again at once.
+let bioAuto = true;
+function lock(auto = false) {
+  bioAuto = auto;
   finishTransition?.();
   S = null; Q = ''; ACT = {}; bioPending = null; cur = { v: null };
   for (const k in snaps) delete snaps[k]; // snapshots contain client data — drop them on lock

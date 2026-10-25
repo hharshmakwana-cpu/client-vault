@@ -2,11 +2,11 @@
 
 const BLOCS = [
   { id: 'farmers',  name: 'Farmers',      icon: '🌾', nat: 0.24 },
-  { id: 'poor',     name: 'Rural Poor',   icon: '🛖', nat: 0.22 },
+  { id: 'poor',     name: 'Poor families',   icon: '🛖', nat: 0.22 },
   { id: 'workers',  name: 'Workers',      icon: '🏭', nat: 0.14 },
-  { id: 'middle',   name: 'Middle Class', icon: '🏠', nat: 0.18 },
-  { id: 'youth',    name: 'Youth',        icon: '🎓', nat: 0.14 },
-  { id: 'business', name: 'Business',     icon: '💼', nat: 0.08 },
+  { id: 'middle',   name: 'City families', icon: '🏠', nat: 0.18 },
+  { id: 'youth',    name: 'Young people',        icon: '🎓', nat: 0.14 },
+  { id: 'business', name: 'Business people',     icon: '💼', nat: 0.08 },
 ];
 
 // base: starting strength [you, RSP, NBM, regional]. pos: [col,row] on tile map.
@@ -67,18 +67,18 @@ const DIFFICULTY = {
 
 // Manifesto promises. check(G) decides at the end of a term whether the promise was kept.
 const PROMISES = [
-  { id: 'loanwaiver', name: 'Farm Loan Waiver', blocs: { farmers: 9, poor: 2, business: -3 }, keep: 'Pass the Farm Loan Waiver.', check: G => G.gov.passed.includes('loanwaiver') },
-  { id: 'msp',        name: 'Legal MSP Guarantee', blocs: { farmers: 10, business: -3, middle: -1 }, keep: 'Pass the MSP Guarantee Act.', check: G => G.gov.passed.includes('msp') },
-  { id: 'taxcut',     name: 'Income Tax Relief', blocs: { middle: 9, youth: 2 }, keep: 'Top income-tax rate at 27% or lower.', check: G => G.eco.b.itr <= 27 },
-  { id: 'jobs',       name: '2 Crore Jobs', blocs: { youth: 9, workers: 4 }, keep: 'Unemployment below 6% at term end.', check: G => G.eco.unemp < 6 },
-  { id: 'ops',        name: 'Old Pension Scheme', blocs: { middle: 5, workers: 4, business: -2 }, keep: 'Restore the Old Pension Scheme.', check: G => G.gov.passed.includes('ops') },
-  { id: 'cash',       name: '₹2,500/month for Women', blocs: { poor: 10, middle: 1 }, keep: 'Pass the Mahila Samman cash transfer.', check: G => G.gov.passed.includes('cash') },
-  { id: 'health',     name: 'Universal Health Cover', blocs: { poor: 6, middle: 4 }, keep: 'Pass Universal Health Insurance.', check: G => G.gov.passed.includes('health') },
-  { id: 'corptax',    name: 'Corporate Tax Cut', blocs: { business: 10, workers: -2, poor: -2 }, keep: 'Corporate tax at 22% or lower.', check: G => G.eco.b.ctr <= 22 },
-  { id: 'prices',     name: 'Control Inflation (<5%)', blocs: { middle: 4, poor: 4, workers: 2 }, keep: 'Average inflation under 5% this term.', check: G => avg(G.hist.infl.slice(-20)) < 5 },
-  { id: 'infra',      name: 'World-Class Infrastructure', blocs: { business: 4, middle: 3, youth: 2 }, keep: 'Infrastructure spending ≥ 3.6% of GDP.', check: G => G.eco.b.infra >= 3.6 },
-  { id: 'lokpal',     name: 'Zero Tolerance on Corruption', blocs: { middle: 3, youth: 3, poor: 1 }, trust: 6, keep: 'Pass the Lokpal Strengthening Act.', check: G => G.gov.passed.includes('lokpal') },
-  { id: 'skills',     name: 'Skill Every Youth', blocs: { youth: 6, workers: 2 }, keep: 'Pass the National Skills Mission.', check: G => G.gov.passed.includes('skills') },
+  { id: 'loanwaiver', name: 'Forgive farmer loans', blocs: { farmers: 9, poor: 2, business: -3 }, keep: 'Pass the Farm Loan Waiver.', check: G => G.gov.passed.includes('loanwaiver') },
+  { id: 'msp',        name: 'Fair crop prices', blocs: { farmers: 10, business: -3, middle: -1 }, keep: 'Pass the MSP Guarantee Act.', check: G => G.gov.passed.includes('msp') },
+  { id: 'taxcut',     name: 'Lower taxes', blocs: { middle: 9, youth: 2 }, keep: 'Top income-tax rate at 27% or lower.', check: G => G.eco.b.itr <= 27 },
+  { id: 'jobs',       name: 'Lots of new jobs', blocs: { youth: 9, workers: 4 }, keep: 'Unemployment below 6% at term end.', check: G => G.eco.unemp < 6 },
+  { id: 'ops',        name: 'Big pensions', blocs: { middle: 5, workers: 4, business: -2 }, keep: 'Restore the Old Pension Scheme.', check: G => G.gov.passed.includes('ops') },
+  { id: 'cash',       name: 'Money for mothers', blocs: { poor: 10, middle: 1 }, keep: 'Pass the Mahila Samman cash transfer.', check: G => G.gov.passed.includes('cash') },
+  { id: 'health',     name: 'Free hospitals', blocs: { poor: 6, middle: 4 }, keep: 'Pass Universal Health Insurance.', check: G => G.gov.passed.includes('health') },
+  { id: 'corptax',    name: 'Help big companies', blocs: { business: 10, workers: -2, poor: -2 }, keep: 'Corporate tax at 22% or lower.', check: G => G.eco.b.ctr <= 22 },
+  { id: 'prices',     name: 'Keep prices low', blocs: { middle: 4, poor: 4, workers: 2 }, keep: 'Average inflation under 5% this term.', check: G => avg(G.hist.infl.slice(-20)) < 5 },
+  { id: 'infra',      name: 'Great roads', blocs: { business: 4, middle: 3, youth: 2 }, keep: 'Infrastructure spending ≥ 3.6% of GDP.', check: G => G.eco.b.infra >= 3.6 },
+  { id: 'lokpal',     name: 'Catch cheaters', blocs: { middle: 3, youth: 3, poor: 1 }, trust: 6, keep: 'Pass the Lokpal Strengthening Act.', check: G => G.gov.passed.includes('lokpal') },
+  { id: 'skills',     name: 'Teach every kid a skill', blocs: { youth: 6, workers: 2 }, keep: 'Pass the National Skills Mission.', check: G => G.gov.passed.includes('skills') },
 ];
 
 // Reforms/bills available as PM.
@@ -86,26 +86,26 @@ const PROMISES = [
 // boost: potential growth added over 4 quarters. spend: ongoing %GDP. oneTime: %GDP spread over 4 qtrs.
 // rev: ongoing revenue %GDP; revOnce: one-off revenue spread over 4 qtrs. unemp: unemployment target shift.
 const REFORMS = [
-  { id: 'gst',        name: 'GST 2.0: Two-Slab Simplification', pc: 3, tags: ['centralise'], blocs: { business: 6, middle: 3 }, boost: .3, rev: -.15, desc: 'Merge GST slabs into two. Cleaner taxes, short-term revenue dip.' },
-  { id: 'labour',     name: 'Labour Codes', pc: 4, tags: ['labour'], blocs: { business: 9, workers: -11, youth: 2 }, boost: .3, unemp: -.5, risk: 'strike', desc: 'Flexible hiring and firing. Factories love it; unions do not.' },
-  { id: 'farmmkt',    name: 'Farm Market Liberalisation', pc: 4, tags: ['farm', 'market'], blocs: { business: 6, farmers: -12 }, boost: .25, risk: 'farmprotest', desc: 'Let farmers sell anywhere, allow contract farming.' },
-  { id: 'msp',        name: 'MSP Guarantee Act', pc: 3, tags: ['fiscal'], blocs: { farmers: 14, business: -5, middle: -1 }, spend: .4, infl: .3, desc: 'Legal guarantee of minimum support prices for 23 crops.' },
-  { id: 'loanwaiver', name: 'Farm Loan Waiver', pc: 2, money: true, tags: ['fiscal'], blocs: { farmers: 12, business: -3, middle: -1 }, oneTime: 1.4, desc: 'Write off small-farmer loans. Hugely popular, hugely expensive.' },
-  { id: 'pli',        name: 'PLI Manufacturing Scheme', pc: 2, money: true, tags: [], blocs: { business: 6, workers: 4, youth: 3 }, spend: .2, boost: .3, unemp: -.4, desc: 'Production-linked incentives for electronics, chips, EVs.' },
-  { id: 'disinvest',  name: 'PSU Disinvestment', pc: 3, tags: ['market'], blocs: { business: 6, workers: -6 }, boost: .15, revOnce: .8, desc: 'Sell stakes in state-owned firms. One-off cash bonanza.' },
-  { id: 'bankrecap',  name: 'Bank Clean-up & Bad Bank', pc: 2, money: true, tags: [], blocs: { business: 4, middle: 1 }, oneTime: .6, boost: .2, flag: 'banksSafe', desc: 'Recapitalise public banks, move bad loans out. Cuts bank-crisis risk.' },
-  { id: 'health',     name: 'Universal Health Insurance', pc: 3, tags: [], blocs: { poor: 10, middle: 4 }, spend: .5, human: .4, desc: '₹10 lakh cover for every family.' },
-  { id: 'cash',       name: 'Mahila Samman Cash Transfer', pc: 2, money: true, tags: ['fiscal'], blocs: { poor: 12, middle: -1, farmers: 2 }, spend: .9, desc: '₹2,500 a month to women in poor households.' },
-  { id: 'ops',        name: 'Restore Old Pension Scheme', pc: 2, money: true, tags: ['fiscal'], blocs: { middle: 6, workers: 4, business: -4 }, spend: .35, desc: 'Guaranteed pensions for government staff. Costs grow every year.' },
-  { id: 'itsimple',   name: 'Direct Tax Code', pc: 2, money: true, tags: [], blocs: { middle: 4, business: 3 }, boost: .1, rev: .1, desc: 'Simplify income tax law. Fewer loopholes, fewer disputes.' },
-  { id: 'green',      name: 'National Green Energy Mission', pc: 2, money: true, tags: [], blocs: { youth: 5, business: 2 }, spend: .3, boost: .1, flag: 'green', desc: 'Solar, green hydrogen, EVs. Halves the hit from oil shocks.' },
-  { id: 'dpi',        name: 'Digital Public Infrastructure 2.0', pc: 2, tags: [], blocs: { youth: 4, business: 3, poor: 2 }, boost: .2, flag: 'dpi', desc: 'Digital IDs, payments and credit for all. Welfare leaks less.' },
-  { id: 'lokpal',     name: 'Lokpal Strengthening Act', pc: 3, tags: ['anticorruption'], blocs: { middle: 4, youth: 4, poor: 2 }, trust: 10, flag: 'lokpal', desc: 'Independent anti-corruption ombudsman with teeth. Allies get nervous.' },
-  { id: 'land',       name: 'Land Acquisition Reform', pc: 4, tags: ['land'], blocs: { business: 7, farmers: -9, poor: -2 }, boost: .25, risk: 'farmprotest', desc: 'Faster land for industry and highways.' },
-  { id: 'urbanjobs',  name: 'Urban Job Guarantee', pc: 3, money: true, tags: ['fiscal'], blocs: { workers: 8, poor: 4, youth: 3 }, spend: .4, unemp: -.6, desc: '100 days of guaranteed work in cities.' },
-  { id: 'skills',     name: 'National Skills Mission', pc: 2, money: true, tags: [], blocs: { youth: 6, workers: 2 }, spend: .25, human: .25, unemp: -.3, desc: 'Apprenticeships and ITIs in every district.' },
-  { id: 'demo',       name: 'Demonetisation', pc: 3, money: true, tags: [], blocs: { middle: -6, poor: -8, business: -7, farmers: -4 }, rev: .3, shock: -2.5, trust: -2, desc: 'Scrap big notes overnight to hit black money. Very risky.' },
-  { id: 'onoe',       name: 'One Nation, One Election', pc: 5, tags: ['centralise'], blocs: { middle: 2, business: 2 }, trust: -2, flag: 'onoe', desc: 'Hold all elections together. No more mid-term state polls.' },
+  { id: 'gst',        name: 'Simple Shop Tax', pc: 3, tags: ['centralise'], blocs: { business: 6, middle: 3 }, boost: .3, rev: -.15, desc: 'Make shop taxes easy and simple.' },
+  { id: 'labour',     name: 'Easy Factory Rules', pc: 4, tags: ['labour'], blocs: { business: 9, workers: -11, youth: 2 }, boost: .3, unemp: -.5, risk: 'strike', desc: 'Factories can hire people easily. Workers may not like it.' },
+  { id: 'farmmkt',    name: 'Farmers Sell Anywhere', pc: 4, tags: ['farm', 'market'], blocs: { business: 6, farmers: -12 }, boost: .25, risk: 'farmprotest', desc: 'Farmers can sell crops to anyone. Some farmers get scared.' },
+  { id: 'msp',        name: 'Fair Crop Prices', pc: 3, tags: ['fiscal'], blocs: { farmers: 14, business: -5, middle: -1 }, spend: .4, infl: .3, desc: 'Promise farmers a fair price for their crops. Costs a lot.' },
+  { id: 'loanwaiver', name: 'Forgive Farmer Loans', pc: 2, money: true, tags: ['fiscal'], blocs: { farmers: 12, business: -3, middle: -1 }, oneTime: 1.4, desc: 'Farmers do not have to pay back loans. Very costly!' },
+  { id: 'pli',        name: 'Make Phones in India', pc: 2, money: true, tags: [], blocs: { business: 6, workers: 4, youth: 3 }, spend: .2, boost: .3, unemp: -.4, desc: 'Help factories make phones and cars here. More jobs!' },
+  { id: 'disinvest',  name: 'Sell Govt Companies', pc: 3, tags: ['market'], blocs: { business: 6, workers: -6 }, boost: .15, revOnce: .8, desc: 'Sell some government companies to get money.' },
+  { id: 'bankrecap',  name: 'Fix the Banks', pc: 2, money: true, tags: [], blocs: { business: 4, middle: 1 }, oneTime: .6, boost: .2, flag: 'banksSafe', desc: 'Make banks strong so they do not break.' },
+  { id: 'health',     name: 'Free Hospital Care', pc: 3, tags: [], blocs: { poor: 10, middle: 4 }, spend: .5, human: .4, desc: 'Free doctors and hospitals for every family.' },
+  { id: 'cash',       name: 'Money for Mothers', pc: 2, money: true, tags: ['fiscal'], blocs: { poor: 12, middle: -1, farmers: 2 }, spend: .9, desc: 'Give money every month to poor mothers.' },
+  { id: 'ops',        name: 'Big Pensions', pc: 2, money: true, tags: ['fiscal'], blocs: { middle: 6, workers: 4, business: -4 }, spend: .35, desc: 'Big pensions for old government workers. Costs more every year.' },
+  { id: 'itsimple',   name: 'Easy Tax Forms', pc: 2, money: true, tags: [], blocs: { middle: 4, business: 3 }, boost: .1, rev: .1, desc: 'Make tax forms short and easy.' },
+  { id: 'green',      name: 'Solar Power', pc: 2, money: true, tags: [], blocs: { youth: 5, business: 2 }, spend: .3, boost: .1, flag: 'green', desc: 'Solar panels everywhere! We need less oil.' },
+  { id: 'dpi',        name: 'Pay with Phones', pc: 2, tags: [], blocs: { youth: 4, business: 3, poor: 2 }, boost: .2, flag: 'dpi', desc: 'Help everyone pay and get help using phones.' },
+  { id: 'lokpal',     name: 'Catch Cheaters Law', pc: 3, tags: ['anticorruption'], blocs: { middle: 4, youth: 4, poor: 2 }, trust: 10, flag: 'lokpal', desc: 'A strong team to catch leaders who cheat. Some friends get nervous.' },
+  { id: 'land',       name: 'Land for Factories', pc: 4, tags: ['land'], blocs: { business: 7, farmers: -9, poor: -2 }, boost: .25, risk: 'farmprotest', desc: 'Make it easy to get land for factories. Farmers may be upset.' },
+  { id: 'urbanjobs',  name: 'Jobs in Cities', pc: 3, money: true, tags: ['fiscal'], blocs: { workers: 8, poor: 4, youth: 3 }, spend: .4, unemp: -.6, desc: 'Promise work to everyone in cities.' },
+  { id: 'skills',     name: 'Learn a Skill', pc: 2, money: true, tags: [], blocs: { youth: 6, workers: 2 }, spend: .25, human: .25, unemp: -.3, desc: 'Training in every town so young people get good jobs.' },
+  { id: 'demo',       name: 'Ban Big Notes', pc: 3, money: true, tags: [], blocs: { middle: -6, poor: -8, business: -7, farmers: -4 }, rev: .3, shock: -2.5, trust: -2, desc: 'Cancel big money notes overnight. Very risky!' },
+  { id: 'onoe',       name: 'One Election Day', pc: 5, tags: ['centralise'], blocs: { middle: 2, business: 2 }, trust: -2, flag: 'onoe', desc: 'Hold all elections on the same day.' },
 ];
 
 const BUDGET_LIMITS = {

@@ -29,7 +29,9 @@ function fans(blocs) {
   return `<div class="fans">${up.length ? `<span class="like">👍 ${up.join('')}</span>` : ''}${down.length ? `<span class="dislike">👎 ${down.join('')}</span>` : ''}</div>`;
 }
 
-function tug(you, A, label = 'Need 272 to win') {
+const word = (good, ok) => good ? '😀 Yes' : ok ? '😐 OK' : '😟 No';
+
+function tug(you, A, label = 'Get 272 to win 👑') {
   const w = x => (x / TOTAL_SEATS * 100).toFixed(1) + '%';
   return `<div class="tug">
     <div class="tugtop"><span class="who"><i class="av" style="background:${G.color}">${G.symbol}</i><b>${you}</b></span><span class="need">${label}</span><span class="who right"><b>${A}</b><i class="av" style="background:${RIVALS.A.color}">🔥</i></span></div>
@@ -97,11 +99,11 @@ function dealCampaign() {
 function moveCard(c, i) {
   const s = c.s ? stateById(c.s) : null;
   let icon, title, sub, badge;
-  if (c.k === 'rally') { icon = '📣'; title = `Rally in ${s.name}`; sub = `${s.seats} seats`; badge = '₹15'; }
-  if (c.k === 'alliance') { icon = '🤝'; title = `Team up with ${s.reg.short}`; sub = `${s.name} · ${s.seats} seats`; badge = Math.round(allianceChance(s.id) * 100) + '%'; }
-  if (c.k === 'ads') { icon = '📺'; title = 'TV Ads everywhere'; sub = 'Boost in every state'; badge = '₹40'; }
-  if (c.k === 'attack') { icon = '⚔️'; title = 'Attack the RSP'; sub = 'Risky!'; badge = '₹10'; }
-  if (c.k === 'fundraise') { icon = '💰'; title = 'Raise money'; sub = 'Get ₹50+'; badge = 'FREE'; }
+  if (c.k === 'rally') { icon = '📣'; title = `Big rally in ${s.name}`; sub = `Win hearts · ${s.seats} seats`; badge = '💰15'; }
+  if (c.k === 'alliance') { const ch = allianceChance(s.id); icon = '🤝'; title = `Make friends in ${s.name}`; sub = `Their local party joins you`; badge = ch >= .5 ? 'Easy 😀' : ch >= .25 ? 'Maybe 🤞' : 'Hard 😬'; }
+  if (c.k === 'ads') { icon = '📺'; title = 'Ads on TV'; sub = 'Everyone sees you'; badge = '💰40'; }
+  if (c.k === 'attack') { icon = '⚔️'; title = 'Show RSP mistakes'; sub = 'Can go wrong!'; badge = '💰10'; }
+  if (c.k === 'fundraise') { icon = '💰'; title = 'Collect money'; sub = 'Get 💰50 more'; badge = 'FREE'; }
   const blocked = actionBlocked(c.k, c.s);
   return `<button class="mcard" data-a="move" data-i="${i}" ${blocked ? 'disabled' : ''} style="animation-delay:${i * 60}ms">
     <span class="mi">${icon}</span><span class="mt"><b>${title}</b><small>${sub}</small></span><span class="badge">${badge}</span></button>`;
@@ -114,11 +116,11 @@ function renderCampaign() {
   if (!UI.deal) dealCampaign();
   const ev = C.event && CAMPAIGN_EVENTS.find(e => e.id === C.event.id);
   return `<div class="screen">
-    ${topbar([`📅 Week ${C.week}/${C.weeks}`, `💰 ₹${Math.round(C.funds)}`])}
+    ${topbar([`📅 Week ${C.week}/${C.weeks}`, `💰 ${Math.round(C.funds)}`])}
     ${tug(last.youBloc, last.aBloc)}
     ${ev ? eventCard(ev, C.event.ctx, 'cev') : `
     <div class="stage">
-      <p class="prompt">Choose your move <span class="dots">${'●'.repeat(C.ap)}${'○'.repeat(C.apMax - C.ap)}</span></p>
+      <p class="prompt">Pick one! <span class="dots">${'●'.repeat(C.ap)}${'○'.repeat(C.apMax - C.ap)}</span></p>
       <div class="mcards">${UI.deal.map(moveCard).join('')}</div>
     </div>`}
   </div>`;
@@ -150,7 +152,7 @@ function eventCard(ev, ctx, kind) {
     <div class="bigcard news">
       <div class="emo">${ev.icon}</div><h2>${ev.title}</h2><p>${esc(ev.text(G, ctx))}</p>
     </div>
-    <div class="answers">${choices.map((c, i) => `<button class="gbtn ${['blue', 'orange', 'red'][i]}" data-a="${kind}" data-i="${i}">${c.label}${c.cost ? ` <small>₹${c.cost}</small>` : ''}${c.pc ? ` <small>${c.pc}⭐</small>` : ''}</button>`).join('')}</div>
+    <div class="answers">${choices.map((c, i) => `<button class="gbtn ${['blue', 'orange', 'red'][i]}" data-a="${kind}" data-i="${i}" ${(c.pc && G.gov && c.pc > G.gov.pc) || (c.cost && G.camp && kind === 'cev' && c.cost > G.camp.funds) ? 'disabled' : ''}>${c.label}${c.cost ? ` <small>₹${c.cost}</small>` : ''}${c.pc ? ` <small>${c.pc}⭐</small>` : ''}</button>`).join('')}</div>
   </div>`;
 }
 
@@ -179,7 +181,7 @@ function renderResults() {
   if (done) {
     if (r.youBloc >= MAJORITY) verdict = '<div class="verdict win">🎉 YOU WIN! 🎉</div>';
     else if (r.aBloc >= MAJORITY) verdict = '<div class="verdict lose">😢 YOU LOST</div>';
-    else verdict = '<div class="verdict">⚖️ NO WINNER YET</div>';
+    else verdict = '<div class="verdict">🤔 Nobody got 272! Find friends!</div>';
   }
   return `<div class="screen">
     ${topbar(['🗳️ Counting votes'])}
@@ -197,24 +199,24 @@ function renderCoalition() {
   const c = G.coal, t = coalTotals();
   const k = c.kingmakers.find(x => !x.side && !x.tried);
   return `<div class="screen">
-    ${topbar([`🤝 Deal time · Round ${Math.min(c.round, c.rounds)}/${c.rounds}`])}
+    ${topbar([`🤝 Find friends · Try ${Math.min(c.round, c.rounds)}/${c.rounds}`])}
     ${tug(t.you, t.A)}
     ${k ? `<div class="stage">
-      <div class="bigcard"><div class="emo">🤝</div><h2>${esc(k.short)}</h2><p>${esc(k.name)} has <b>${k.seats} seats</b>. Will they join you?</p></div>
+      <div class="bigcard"><div class="emo">🤝</div><h2>${esc(k.short)}</h2><p>This party has <b>${k.seats} seats</b>. Will they be your friend?</p></div>
       <div class="answers">
         <button class="gbtn blue" data-a="offer" data-k="${k.key}" data-o="ask">🙏 Just ask</button>
         <button class="gbtn orange" data-a="offer" data-k="${k.key}" data-o="berth" ${c.berths ? '' : 'disabled'}>🏛️ Make them minister</button>
-        <button class="gbtn green" data-a="offer" data-k="${k.key}" data-o="package">🎁 Money for their state</button>
+        <button class="gbtn green" data-a="offer" data-k="${k.key}" data-o="package">🎁 Give money to their state</button>
       </div></div>`
     : `<div class="stage"><p class="prompt">Waiting for the others…</p></div><div class="bottom"><button class="gbtn green big" data-a="coalround">NEXT ▶</button></div>`}
   </div>`;
 }
 
 // ---------------- governance ----------------
-function meter(icon, good) {
+function meter(icon, good, label) {
   const g = clamp(good, 0, 1);
   const col = g >= .6 ? '#4ade80' : g >= .35 ? '#facc15' : '#f87171';
-  return `<div class="meter"><div class="mfill"><i style="height:${Math.max(6, g * 100)}%;background:${col}"></i><span>${icon}</span></div></div>`;
+  return `<div class="meter"><div class="mfill"><i style="height:${Math.max(6, g * 100)}%;background:${col}"></i><span>${icon}</span></div><small>${label}</small></div>`;
 }
 
 function renderGov() {
@@ -228,12 +230,12 @@ function renderGov() {
   else if (!g.played && UI.card < g.hand.length) stage = ideaStage(g.hand[UI.card]);
   else stage = `<div class="stage"><div class="bigcard"><div class="emo">⏳</div><h2>Time passes…</h2></div></div><div class="bottom"><button class="gbtn green big" data-a="endq">NEXT ▶</button></div>`;
   return `<div class="screen">
-    ${topbar([`📅 Year ${Math.floor(g.q / 4) + 1}/5`, `⭐ ${g.pc}`])}
+    ${topbar([`📅 Year ${Math.floor(g.q / 4) + 1}/5`, `⭐ ${g.pc} energy`])}
     <div class="meters" data-a="stats">
-      ${meter('😀', (overallApproval() - 25) / 45)}
-      ${meter('💰', (e.growth - 2) / 7)}
-      ${meter('🛒', 1 - (e.infl - 3.5) / 6)}
-      ${meter('🏦', 1 - (e.deficit - 3.5) / 4.5)}
+      ${meter('😀', (overallApproval() - 25) / 45, 'Happy')}
+      ${meter('🏭', (e.growth - 2) / 7, 'Jobs')}
+      ${meter('🛒', 1 - (e.infl - 3.5) / 6, 'Prices')}
+      ${meter('🐷', 1 - (e.deficit - 3.5) / 4.5, 'Savings')}
     </div>
     ${stage}
   </div>`;
@@ -242,9 +244,9 @@ function renderGov() {
 function budgetStage() {
   const icons = { populist: 'green', balanced: 'blue', growth: 'orange', austerity: 'red' };
   return `<div class="stage">
-    <div class="bigcard"><div class="emo">📒</div><h2>Budget Day!</h2><p>How will you spend India's money this year?</p></div>
+    <div class="bigcard"><div class="emo">📒</div><h2>Money Day!</h2><p>How will you use India's money this year?</p></div>
     <div class="grid2">${Object.entries(BUDGET_PRESETS).map(([k, p]) => `<button class="gbtn ${icons[k]}" data-a="preset" data-k="${k}">${p.icon} ${p.name}</button>`).join('')}</div>
-    <p class="tiny">🎁 happy people, more debt · ✂️ less debt, angry people · 🏗️ growth later</p>
+    <p class="tiny">Gifts make people happy now. Saving keeps India safe later.</p>
   </div>`;
 }
 
@@ -268,7 +270,7 @@ function ideaStage(c) {
     </div>
     <div class="yesno">
       <button class="round red" data-a="skipcard" aria-label="No">✖</button>
-      <span class="tiny">${can ? 'swipe or tap' : 'Not enough ⭐'}</span>
+      <span class="tiny">${can ? 'NO ← swipe → YES' : 'Need more ⭐ energy'}</span>
       <button class="round green" data-a="playcard" ${can ? '' : 'disabled'} aria-label="Yes">✔</button>
     </div>
   </div>`;
@@ -280,7 +282,7 @@ function renderReport() {
   return `<div class="screen title">
     <div class="logo-art">📋</div><h2 class="white">5 years done!</h2>
     <div class="bigcard">
-      <p>😀 Popularity <b>${r.approval}%</b></p><p>💰 Growth <b>${r.growth}%</b></p>
+      <p>😀 People happy: <b>${r.approval}%</b></p>
       <p>✅ Promises kept <b>${r.kept.length}</b> · ❌ broken <b>${r.broken.length}</b></p>
     </div>
     <div class="spacer"></div>
@@ -364,7 +366,7 @@ function finishQuarter() {
   UI.card = 0;
   if (G.phase === 'gov') {
     const d = Math.round(overallApproval() - before);
-    toast(`${d >= 0 ? '😀' : '😟'} People ${d >= 0 ? '+' : ''}${d}%`, d >= 0 ? 'good' : 'bad');
+    toast(d >= 0 ? '😀 People are happier!' : '😟 People are less happy', d >= 0 ? 'good' : 'bad');
   }
   render();
 }
@@ -393,15 +395,24 @@ const ACTIONS = {
   move(d) {
     const c = UI.deal[+d.i];
     const before = G.camp.polls[G.camp.polls.length - 1].youBloc;
+    const trust0 = G.trust;
     const r = campaignAction(c.k, c.s, false);
     if (r.err) return handle(r);
-    toast(r.msg, 'good'); buzz(15);
+    const s = c.s && stateById(c.s);
+    const say = {
+      rally: `📣 Big crowd in ${s && s.name}!`,
+      alliance: s && G.camp.alliances[c.s] === 'you' ? `🤝 New friend in ${s.name}! 🎉` : '😕 They said no. Try later.',
+      ads: '📺 Everyone saw your ad!',
+      fundraise: '💰 You got more money!',
+      attack: G.trust < trust0 ? '😬 Oops! That went wrong.' : '⚔️ It worked! RSP looks bad.',
+    }[c.k];
+    toast(say, say.startsWith('😕') || say.startsWith('😬') ? 'bad' : 'good'); buzz(15);
     UI.deal = null;
     if (G.camp.ap === 0) {
       const w = endWeek();
       if (!w.election) {
         const now = G.camp.polls[G.camp.polls.length - 1].youBloc;
-        toast(`📊 New poll: ${now - before >= 0 ? '+' : ''}${now - before} seats`, now >= before ? 'good' : 'bad');
+        toast(now >= before ? `📈 You went up ${now - before} seats!` : `📉 You went down ${before - now} seats`, now >= before ? 'good' : 'bad');
       } else UI.reveal = null;
     }
     render();
@@ -412,7 +423,13 @@ const ACTIONS = {
     UI.reveal = null; afterResults(); save(); UI.card = 0; render();
     if (G.phase === 'gov') welcomePM();
   },
-  offer(d) { handle(coalOffer(d.k, d.o)); save(); },
+  offer(d) {
+    const k = G.coal.kingmakers.find(x => x.key === d.k);
+    const r = coalOffer(d.k, d.o); save();
+    if (r.err) return handle(r);
+    toast(k.side === 'you' ? `🎉 ${k.short} joins you!` : `😕 ${k.short} said no.`, k.side === 'you' ? 'good' : 'bad'); buzz(15);
+    render();
+  },
   coalround() { coalEndRound(); save(); UI.card = 0; render(); if (G.phase === 'gov') welcomePM(); },
   gev(d) {
     const r = resolveGovEvent(+d.i);
@@ -421,24 +438,23 @@ const ACTIONS = {
     if (r.phaseChange) { UI.deal = null; UI.pdeal = null; UI.picked = []; }
     render();
   },
-  preset(d) { handle(budgetPreset(d.k)); },
+  preset(d) { const r = budgetPreset(d.k); if (r.err) return handle(r); toast(`${BUDGET_PRESETS[d.k].icon} Done!`, 'good'); render(); },
   playcard() {
     const r = playCard(UI.card);
     if (r.err) { toast(r.err, 'bad'); return render(); }
-    toast(r.msg, r.fail ? 'bad' : 'good');
     finishQuarter();
+    toast(r.fail ? '😞 Not enough votes. It did not pass.' : '🎉 Yes! It is done!', r.fail ? 'bad' : 'good');
   },
   skipcard() { UI.card++; if (UI.card >= G.gov.hand.length) finishQuarter(); else render(); },
   endq() { finishQuarter(); },
   stats() {
     const e = G.eco;
     openModal(`<h2>🇮🇳 India</h2>
-      <div class="srow"><span>😀 People happy</span><b>${Math.round(overallApproval())}%</b></div>
-      <div class="srow"><span>💰 Economy growth</span><b>${e.growth.toFixed(1)}%</b></div>
-      <div class="srow"><span>🛒 Prices rising</span><b>${e.infl.toFixed(1)}%</b></div>
-      <div class="srow"><span>🏦 Govt. debt (deficit)</span><b>${e.deficit.toFixed(1)}%</b></div>
-      <div class="srow"><span>👷 Jobless</span><b>${e.unemp.toFixed(1)}%</b></div>
-      <div class="faces">${BLOCS.map(b => `<span>${b.icon}<br>${Math.round(G.gov.approval[b.id])}%</span>`).join('')}</div>
+      <div class="srow"><span>😀 Are people happy?</span><b>${word(overallApproval() >= 50, overallApproval() >= 40)}</b></div>
+      <div class="srow"><span>🏭 Are there jobs?</span><b>${word(e.growth >= 6, e.growth >= 4)}</b></div>
+      <div class="srow"><span>🛒 Are prices OK?</span><b>${word(e.infl <= 4.5, e.infl <= 6.5)}</b></div>
+      <div class="srow"><span>🐷 Is India saving money?</span><b>${word(e.deficit <= 4.5, e.deficit <= 6.5)}</b></div>
+      <h3>Who is happy?</h3>${BLOCS.map(b => { const v = G.gov.approval[b.id]; return `<div class="srow"><span>${b.icon} ${b.name}</span><b>${v >= 55 ? '😀' : v >= 42 ? '😐' : '😠'}</b></div>`; }).join('')}
       ${G.gov.promises.length ? `<h3>Promises</h3>${G.gov.promises.map(id => `<div class="srow"><span>${PROMISES.find(x => x.id === id).check(G) ? '✅' : '⏳'} ${PROMISES.find(x => x.id === id).name}</span></div>`).join('')}` : ''}
       <button class="gbtn green" data-a="closemodal">OK</button>`);
   },
@@ -447,7 +463,7 @@ const ACTIONS = {
     openModal(`<h2>🤝 Friends</h2>${g.allies.map(a => `<div class="srow"><span>${a.sat >= 50 ? '😀' : a.sat >= 30 ? '😐' : '😠'} ${esc(a.short)} · ${a.seats} seats</span><button class="gbtn small orange" data-a="pkggo" data-k="${a.key}" ${g.pc < 1 ? 'disabled' : ''}>🎁 1⭐</button></div>`).join('') || '<p>No allies.</p>'}
       <button class="gbtn green" data-a="closemodal">OK</button>`);
   },
-  pkggo(d) { handle(allyPackage(d.k)); },
+  pkggo(d) { const r = allyPackage(d.k); if (r.err) return handle(r); toast('🎁 Your friend is happy!', 'good'); render(); },
   reelect() { goToElection(false); UI.deal = null; UI.pdeal = null; UI.picked = []; render(); },
   menu() {
     openModal(`<h2>Menu</h2><div class="answers">
@@ -462,7 +478,7 @@ const ACTIONS = {
 function welcomePM() {
   openModal(`<div class="center"><div class="emo">🇮🇳</div><h2>You are Prime Minister!</h2>
     <p>Ideas will come to you.<br><b>Swipe right = YES</b> · <b>left = NO</b></p>
-    <p>Keep the 4 meters green!</p><button class="gbtn green" data-a="closemodal">LET'S GO ▶</button></div>`);
+    <p>Keep the 4 meters green! 🟩</p><p>Each idea needs ⭐ energy. Happy people give you more.</p><button class="gbtn green" data-a="closemodal">LET'S GO ▶</button></div>`);
 }
 
 document.addEventListener('click', e => {

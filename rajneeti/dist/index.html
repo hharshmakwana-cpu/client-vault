@@ -160,6 +160,8 @@ p { margin: .3em 0; }
 .toast.good { box-shadow: 0 6px 0 var(--green); }
 
 @media (max-height: 680px) { .emo { font-size: 56px; } .mi { font-size: 30px; width: 46px; height: 46px; } .mcard { padding: 10px; } .bignums b { font-size: 54px; min-width: 100px; } }
+.meter { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.meter small { color: #fff; font-weight: 900; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -170,11 +172,11 @@ p { margin: .3em 0; }
 
 const BLOCS = [
   { id: 'farmers',  name: 'Farmers',      icon: '🌾', nat: 0.24 },
-  { id: 'poor',     name: 'Rural Poor',   icon: '🛖', nat: 0.22 },
+  { id: 'poor',     name: 'Poor families',   icon: '🛖', nat: 0.22 },
   { id: 'workers',  name: 'Workers',      icon: '🏭', nat: 0.14 },
-  { id: 'middle',   name: 'Middle Class', icon: '🏠', nat: 0.18 },
-  { id: 'youth',    name: 'Youth',        icon: '🎓', nat: 0.14 },
-  { id: 'business', name: 'Business',     icon: '💼', nat: 0.08 },
+  { id: 'middle',   name: 'City families', icon: '🏠', nat: 0.18 },
+  { id: 'youth',    name: 'Young people',        icon: '🎓', nat: 0.14 },
+  { id: 'business', name: 'Business people',     icon: '💼', nat: 0.08 },
 ];
 
 // base: starting strength [you, RSP, NBM, regional]. pos: [col,row] on tile map.
@@ -235,18 +237,18 @@ const DIFFICULTY = {
 
 // Manifesto promises. check(G) decides at the end of a term whether the promise was kept.
 const PROMISES = [
-  { id: 'loanwaiver', name: 'Farm Loan Waiver', blocs: { farmers: 9, poor: 2, business: -3 }, keep: 'Pass the Farm Loan Waiver.', check: G => G.gov.passed.includes('loanwaiver') },
-  { id: 'msp',        name: 'Legal MSP Guarantee', blocs: { farmers: 10, business: -3, middle: -1 }, keep: 'Pass the MSP Guarantee Act.', check: G => G.gov.passed.includes('msp') },
-  { id: 'taxcut',     name: 'Income Tax Relief', blocs: { middle: 9, youth: 2 }, keep: 'Top income-tax rate at 27% or lower.', check: G => G.eco.b.itr <= 27 },
-  { id: 'jobs',       name: '2 Crore Jobs', blocs: { youth: 9, workers: 4 }, keep: 'Unemployment below 6% at term end.', check: G => G.eco.unemp < 6 },
-  { id: 'ops',        name: 'Old Pension Scheme', blocs: { middle: 5, workers: 4, business: -2 }, keep: 'Restore the Old Pension Scheme.', check: G => G.gov.passed.includes('ops') },
-  { id: 'cash',       name: '₹2,500/month for Women', blocs: { poor: 10, middle: 1 }, keep: 'Pass the Mahila Samman cash transfer.', check: G => G.gov.passed.includes('cash') },
-  { id: 'health',     name: 'Universal Health Cover', blocs: { poor: 6, middle: 4 }, keep: 'Pass Universal Health Insurance.', check: G => G.gov.passed.includes('health') },
-  { id: 'corptax',    name: 'Corporate Tax Cut', blocs: { business: 10, workers: -2, poor: -2 }, keep: 'Corporate tax at 22% or lower.', check: G => G.eco.b.ctr <= 22 },
-  { id: 'prices',     name: 'Control Inflation (<5%)', blocs: { middle: 4, poor: 4, workers: 2 }, keep: 'Average inflation under 5% this term.', check: G => avg(G.hist.infl.slice(-20)) < 5 },
-  { id: 'infra',      name: 'World-Class Infrastructure', blocs: { business: 4, middle: 3, youth: 2 }, keep: 'Infrastructure spending ≥ 3.6% of GDP.', check: G => G.eco.b.infra >= 3.6 },
-  { id: 'lokpal',     name: 'Zero Tolerance on Corruption', blocs: { middle: 3, youth: 3, poor: 1 }, trust: 6, keep: 'Pass the Lokpal Strengthening Act.', check: G => G.gov.passed.includes('lokpal') },
-  { id: 'skills',     name: 'Skill Every Youth', blocs: { youth: 6, workers: 2 }, keep: 'Pass the National Skills Mission.', check: G => G.gov.passed.includes('skills') },
+  { id: 'loanwaiver', name: 'Forgive farmer loans', blocs: { farmers: 9, poor: 2, business: -3 }, keep: 'Pass the Farm Loan Waiver.', check: G => G.gov.passed.includes('loanwaiver') },
+  { id: 'msp',        name: 'Fair crop prices', blocs: { farmers: 10, business: -3, middle: -1 }, keep: 'Pass the MSP Guarantee Act.', check: G => G.gov.passed.includes('msp') },
+  { id: 'taxcut',     name: 'Lower taxes', blocs: { middle: 9, youth: 2 }, keep: 'Top income-tax rate at 27% or lower.', check: G => G.eco.b.itr <= 27 },
+  { id: 'jobs',       name: 'Lots of new jobs', blocs: { youth: 9, workers: 4 }, keep: 'Unemployment below 6% at term end.', check: G => G.eco.unemp < 6 },
+  { id: 'ops',        name: 'Big pensions', blocs: { middle: 5, workers: 4, business: -2 }, keep: 'Restore the Old Pension Scheme.', check: G => G.gov.passed.includes('ops') },
+  { id: 'cash',       name: 'Money for mothers', blocs: { poor: 10, middle: 1 }, keep: 'Pass the Mahila Samman cash transfer.', check: G => G.gov.passed.includes('cash') },
+  { id: 'health',     name: 'Free hospitals', blocs: { poor: 6, middle: 4 }, keep: 'Pass Universal Health Insurance.', check: G => G.gov.passed.includes('health') },
+  { id: 'corptax',    name: 'Help big companies', blocs: { business: 10, workers: -2, poor: -2 }, keep: 'Corporate tax at 22% or lower.', check: G => G.eco.b.ctr <= 22 },
+  { id: 'prices',     name: 'Keep prices low', blocs: { middle: 4, poor: 4, workers: 2 }, keep: 'Average inflation under 5% this term.', check: G => avg(G.hist.infl.slice(-20)) < 5 },
+  { id: 'infra',      name: 'Great roads', blocs: { business: 4, middle: 3, youth: 2 }, keep: 'Infrastructure spending ≥ 3.6% of GDP.', check: G => G.eco.b.infra >= 3.6 },
+  { id: 'lokpal',     name: 'Catch cheaters', blocs: { middle: 3, youth: 3, poor: 1 }, trust: 6, keep: 'Pass the Lokpal Strengthening Act.', check: G => G.gov.passed.includes('lokpal') },
+  { id: 'skills',     name: 'Teach every kid a skill', blocs: { youth: 6, workers: 2 }, keep: 'Pass the National Skills Mission.', check: G => G.gov.passed.includes('skills') },
 ];
 
 // Reforms/bills available as PM.
@@ -254,26 +256,26 @@ const PROMISES = [
 // boost: potential growth added over 4 quarters. spend: ongoing %GDP. oneTime: %GDP spread over 4 qtrs.
 // rev: ongoing revenue %GDP; revOnce: one-off revenue spread over 4 qtrs. unemp: unemployment target shift.
 const REFORMS = [
-  { id: 'gst',        name: 'GST 2.0: Two-Slab Simplification', pc: 3, tags: ['centralise'], blocs: { business: 6, middle: 3 }, boost: .3, rev: -.15, desc: 'Merge GST slabs into two. Cleaner taxes, short-term revenue dip.' },
-  { id: 'labour',     name: 'Labour Codes', pc: 4, tags: ['labour'], blocs: { business: 9, workers: -11, youth: 2 }, boost: .3, unemp: -.5, risk: 'strike', desc: 'Flexible hiring and firing. Factories love it; unions do not.' },
-  { id: 'farmmkt',    name: 'Farm Market Liberalisation', pc: 4, tags: ['farm', 'market'], blocs: { business: 6, farmers: -12 }, boost: .25, risk: 'farmprotest', desc: 'Let farmers sell anywhere, allow contract farming.' },
-  { id: 'msp',        name: 'MSP Guarantee Act', pc: 3, tags: ['fiscal'], blocs: { farmers: 14, business: -5, middle: -1 }, spend: .4, infl: .3, desc: 'Legal guarantee of minimum support prices for 23 crops.' },
-  { id: 'loanwaiver', name: 'Farm Loan Waiver', pc: 2, money: true, tags: ['fiscal'], blocs: { farmers: 12, business: -3, middle: -1 }, oneTime: 1.4, desc: 'Write off small-farmer loans. Hugely popular, hugely expensive.' },
-  { id: 'pli',        name: 'PLI Manufacturing Scheme', pc: 2, money: true, tags: [], blocs: { business: 6, workers: 4, youth: 3 }, spend: .2, boost: .3, unemp: -.4, desc: 'Production-linked incentives for electronics, chips, EVs.' },
-  { id: 'disinvest',  name: 'PSU Disinvestment', pc: 3, tags: ['market'], blocs: { business: 6, workers: -6 }, boost: .15, revOnce: .8, desc: 'Sell stakes in state-owned firms. One-off cash bonanza.' },
-  { id: 'bankrecap',  name: 'Bank Clean-up & Bad Bank', pc: 2, money: true, tags: [], blocs: { business: 4, middle: 1 }, oneTime: .6, boost: .2, flag: 'banksSafe', desc: 'Recapitalise public banks, move bad loans out. Cuts bank-crisis risk.' },
-  { id: 'health',     name: 'Universal Health Insurance', pc: 3, tags: [], blocs: { poor: 10, middle: 4 }, spend: .5, human: .4, desc: '₹10 lakh cover for every family.' },
-  { id: 'cash',       name: 'Mahila Samman Cash Transfer', pc: 2, money: true, tags: ['fiscal'], blocs: { poor: 12, middle: -1, farmers: 2 }, spend: .9, desc: '₹2,500 a month to women in poor households.' },
-  { id: 'ops',        name: 'Restore Old Pension Scheme', pc: 2, money: true, tags: ['fiscal'], blocs: { middle: 6, workers: 4, business: -4 }, spend: .35, desc: 'Guaranteed pensions for government staff. Costs grow every year.' },
-  { id: 'itsimple',   name: 'Direct Tax Code', pc: 2, money: true, tags: [], blocs: { middle: 4, business: 3 }, boost: .1, rev: .1, desc: 'Simplify income tax law. Fewer loopholes, fewer disputes.' },
-  { id: 'green',      name: 'National Green Energy Mission', pc: 2, money: true, tags: [], blocs: { youth: 5, business: 2 }, spend: .3, boost: .1, flag: 'green', desc: 'Solar, green hydrogen, EVs. Halves the hit from oil shocks.' },
-  { id: 'dpi',        name: 'Digital Public Infrastructure 2.0', pc: 2, tags: [], blocs: { youth: 4, business: 3, poor: 2 }, boost: .2, flag: 'dpi', desc: 'Digital IDs, payments and credit for all. Welfare leaks less.' },
-  { id: 'lokpal',     name: 'Lokpal Strengthening Act', pc: 3, tags: ['anticorruption'], blocs: { middle: 4, youth: 4, poor: 2 }, trust: 10, flag: 'lokpal', desc: 'Independent anti-corruption ombudsman with teeth. Allies get nervous.' },
-  { id: 'land',       name: 'Land Acquisition Reform', pc: 4, tags: ['land'], blocs: { business: 7, farmers: -9, poor: -2 }, boost: .25, risk: 'farmprotest', desc: 'Faster land for industry and highways.' },
-  { id: 'urbanjobs',  name: 'Urban Job Guarantee', pc: 3, money: true, tags: ['fiscal'], blocs: { workers: 8, poor: 4, youth: 3 }, spend: .4, unemp: -.6, desc: '100 days of guaranteed work in cities.' },
-  { id: 'skills',     name: 'National Skills Mission', pc: 2, money: true, tags: [], blocs: { youth: 6, workers: 2 }, spend: .25, human: .25, unemp: -.3, desc: 'Apprenticeships and ITIs in every district.' },
-  { id: 'demo',       name: 'Demonetisation', pc: 3, money: true, tags: [], blocs: { middle: -6, poor: -8, business: -7, farmers: -4 }, rev: .3, shock: -2.5, trust: -2, desc: 'Scrap big notes overnight to hit black money. Very risky.' },
-  { id: 'onoe',       name: 'One Nation, One Election', pc: 5, tags: ['centralise'], blocs: { middle: 2, business: 2 }, trust: -2, flag: 'onoe', desc: 'Hold all elections together. No more mid-term state polls.' },
+  { id: 'gst',        name: 'Simple Shop Tax', pc: 3, tags: ['centralise'], blocs: { business: 6, middle: 3 }, boost: .3, rev: -.15, desc: 'Make shop taxes easy and simple.' },
+  { id: 'labour',     name: 'Easy Factory Rules', pc: 4, tags: ['labour'], blocs: { business: 9, workers: -11, youth: 2 }, boost: .3, unemp: -.5, risk: 'strike', desc: 'Factories can hire people easily. Workers may not like it.' },
+  { id: 'farmmkt',    name: 'Farmers Sell Anywhere', pc: 4, tags: ['farm', 'market'], blocs: { business: 6, farmers: -12 }, boost: .25, risk: 'farmprotest', desc: 'Farmers can sell crops to anyone. Some farmers get scared.' },
+  { id: 'msp',        name: 'Fair Crop Prices', pc: 3, tags: ['fiscal'], blocs: { farmers: 14, business: -5, middle: -1 }, spend: .4, infl: .3, desc: 'Promise farmers a fair price for their crops. Costs a lot.' },
+  { id: 'loanwaiver', name: 'Forgive Farmer Loans', pc: 2, money: true, tags: ['fiscal'], blocs: { farmers: 12, business: -3, middle: -1 }, oneTime: 1.4, desc: 'Farmers do not have to pay back loans. Very costly!' },
+  { id: 'pli',        name: 'Make Phones in India', pc: 2, money: true, tags: [], blocs: { business: 6, workers: 4, youth: 3 }, spend: .2, boost: .3, unemp: -.4, desc: 'Help factories make phones and cars here. More jobs!' },
+  { id: 'disinvest',  name: 'Sell Govt Companies', pc: 3, tags: ['market'], blocs: { business: 6, workers: -6 }, boost: .15, revOnce: .8, desc: 'Sell some government companies to get money.' },
+  { id: 'bankrecap',  name: 'Fix the Banks', pc: 2, money: true, tags: [], blocs: { business: 4, middle: 1 }, oneTime: .6, boost: .2, flag: 'banksSafe', desc: 'Make banks strong so they do not break.' },
+  { id: 'health',     name: 'Free Hospital Care', pc: 3, tags: [], blocs: { poor: 10, middle: 4 }, spend: .5, human: .4, desc: 'Free doctors and hospitals for every family.' },
+  { id: 'cash',       name: 'Money for Mothers', pc: 2, money: true, tags: ['fiscal'], blocs: { poor: 12, middle: -1, farmers: 2 }, spend: .9, desc: 'Give money every month to poor mothers.' },
+  { id: 'ops',        name: 'Big Pensions', pc: 2, money: true, tags: ['fiscal'], blocs: { middle: 6, workers: 4, business: -4 }, spend: .35, desc: 'Big pensions for old government workers. Costs more every year.' },
+  { id: 'itsimple',   name: 'Easy Tax Forms', pc: 2, money: true, tags: [], blocs: { middle: 4, business: 3 }, boost: .1, rev: .1, desc: 'Make tax forms short and easy.' },
+  { id: 'green',      name: 'Solar Power', pc: 2, money: true, tags: [], blocs: { youth: 5, business: 2 }, spend: .3, boost: .1, flag: 'green', desc: 'Solar panels everywhere! We need less oil.' },
+  { id: 'dpi',        name: 'Pay with Phones', pc: 2, tags: [], blocs: { youth: 4, business: 3, poor: 2 }, boost: .2, flag: 'dpi', desc: 'Help everyone pay and get help using phones.' },
+  { id: 'lokpal',     name: 'Catch Cheaters Law', pc: 3, tags: ['anticorruption'], blocs: { middle: 4, youth: 4, poor: 2 }, trust: 10, flag: 'lokpal', desc: 'A strong team to catch leaders who cheat. Some friends get nervous.' },
+  { id: 'land',       name: 'Land for Factories', pc: 4, tags: ['land'], blocs: { business: 7, farmers: -9, poor: -2 }, boost: .25, risk: 'farmprotest', desc: 'Make it easy to get land for factories. Farmers may be upset.' },
+  { id: 'urbanjobs',  name: 'Jobs in Cities', pc: 3, money: true, tags: ['fiscal'], blocs: { workers: 8, poor: 4, youth: 3 }, spend: .4, unemp: -.6, desc: 'Promise work to everyone in cities.' },
+  { id: 'skills',     name: 'Learn a Skill', pc: 2, money: true, tags: [], blocs: { youth: 6, workers: 2 }, spend: .25, human: .25, unemp: -.3, desc: 'Training in every town so young people get good jobs.' },
+  { id: 'demo',       name: 'Ban Big Notes', pc: 3, money: true, tags: [], blocs: { middle: -6, poor: -8, business: -7, farmers: -4 }, rev: .3, shock: -2.5, trust: -2, desc: 'Cancel big money notes overnight. Very risky!' },
+  { id: 'onoe',       name: 'One Election Day', pc: 5, tags: ['centralise'], blocs: { middle: 2, business: 2 }, trust: -2, flag: 'onoe', desc: 'Hold all elections on the same day.' },
 ];
 
 const BUDGET_LIMITS = {
@@ -293,7 +295,8 @@ const RATINGS = ['BB+ (Junk)', 'BBB-', 'BBB', 'BBB+', 'A-'];
 function avg(a) { return a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0; }
 </script>
 <script>
-// RAJNEETI — event cards. Each choice's run() mutates G and returns a log line.
+// RAJNEETI — event cards, written so a young child can follow them.
+// Each choice's run() changes G and returns a short message.
 
 const COASTAL = ['OD', 'AP', 'TN', 'WB', 'GJ', 'KL', 'MH'];
 const bigState = () => pick(STATES.filter(s => s.seats >= 14));
@@ -303,263 +306,263 @@ const ground = (id, x) => { G.camp.ground[id] = Math.max(-10, G.camp.ground[id] 
 const appeal = (b, x) => { G.appeal.you[b] += x; };
 
 const CAMPAIGN_EVENTS = [
-  { id: 'gaffe', icon: '🎥', title: 'Doctored Video Goes Viral',
-    text: () => 'A clip of your speech, edited to make you sound anti-farmer, is spreading on WhatsApp.',
+  { id: 'gaffe', icon: '🎥', title: 'Fake Video!',
+    text: () => 'Someone cut your speech to make you look bad. It is spreading on phones.',
     choices: () => [
-      { label: 'Press conference with the full video', cost: 5, hint: '₹5 cr · small momentum loss', run: () => { mom(-.5); tr(2); return 'You release the full speech. Most viewers see the truth.'; } },
-      { label: 'Call it fake news and go on the offensive', hint: 'Gamble: big swing either way', run: () => rand() < .5 ? (mom(2), 'Your counter-attack trends nationally. Momentum up!') : (mom(-3), appeal('farmers', -2), 'The fight keeps the clip in the news. Farmers are unhappy.') },
-      { label: 'Ignore it', hint: 'Momentum −2', run: () => { mom(-2); return 'The clip fades slowly but costs you.'; } },
+      { label: '📢 Show the real video', cost: 5, run: () => { mom(-.5); tr(2); return 'People saw the truth. 👍'; } },
+      { label: '😤 Fight back hard', run: () => rand() < .5 ? (mom(2), 'It worked! People cheer for you. 🎉') : (mom(-3), appeal('farmers', -2), 'Oops! The fight made it worse. 😬') },
+      { label: '🙈 Ignore it', run: () => { mom(-2); return 'It slowly goes away, but it hurt a bit.'; } },
     ] },
-  { id: 'defector', icon: '🚶', title: 'Senior Leader Defects',
+  { id: 'defector', icon: '🚶', title: 'A Leader Wants to Leave',
     ctx: () => ({ s: bigState().id }),
-    text: (G, c) => `A popular three-time MP from ${stateById(c.s).name} is in talks to join the RSP.`,
+    text: (G, c) => `A popular leader from ${stateById(c.s).name} wants to join the RSP.`,
     choices: (G, c) => [
-      { label: 'Offer a party post and a ticket for his son', cost: 10, hint: '₹10 cr · trust −2', run: () => { tr(-2); return 'He stays, but critics call it dynasty politics.'; } },
-      { label: 'Let him go', hint: `Local support in ${stateById(c.s).name} −4`, run: () => { ground(c.s, -4); return `He joins the RSP, taking supporters in ${stateById(c.s).name} with him.`; } },
+      { label: '🎁 Give him a big job to stay', cost: 10, run: () => { tr(-2); return 'He stays with you.'; } },
+      { label: '👋 Let him go', run: () => { ground(c.s, -4); return `He left. You lost some fans in ${stateById(c.s).name}.`; } },
     ] },
-  { id: 'celebrity', icon: '🌟', title: 'Film Star Wants to Join',
-    text: () => 'A hugely popular film star wants to join your party and campaign for you.',
+  { id: 'celebrity', icon: '🌟', title: 'Movie Star Wants to Help!',
+    text: () => 'A famous film star wants to join your team.',
     choices: () => [
-      { label: 'Welcome her with a grand event', cost: 5, hint: 'Youth +3, momentum +2', run: () => { appeal('youth', 3); mom(2); return 'Crowds double at rallies wherever she appears.'; } },
-      { label: 'Politely decline', hint: 'Trust +1', run: () => { tr(1); return 'You say politics needs serious people. Some respect it.'; } },
+      { label: '🤩 Yes, welcome!', cost: 5, run: () => { appeal('youth', 3); mom(2); return 'Huge crowds come to see her! 🎉'; } },
+      { label: '🙂 No, thank you', run: () => { tr(1); return 'You keep things serious.'; } },
     ] },
-  { id: 'rivalscam', icon: '📰', title: 'Scam Hits the Government',
-    text: () => 'Reports say a minister in the RSP government steered a ₹4,000 cr defence contract to a crony.',
+  { id: 'rivalscam', icon: '📰', title: 'RSP Caught Cheating!',
+    text: () => 'News says an RSP minister gave a big deal to his friend.',
     choices: () => [
-      { label: 'Raise it in every speech', cost: 8, hint: 'RSP momentum −3', run: () => { G.camp.momA -= 3; return 'The scam dominates headlines. The government is on the back foot.'; } },
-      { label: 'Demand a probe, stay positive', hint: 'Trust +3, RSP momentum −1', run: () => { tr(3); G.camp.momA -= 1; return 'You look statesmanlike.'; } },
+      { label: '📣 Tell everyone!', cost: 8, run: () => { G.camp.momA -= 3; return 'Everyone is talking about it. RSP looks bad!'; } },
+      { label: '🙂 Ask for a fair check', run: () => { tr(3); G.camp.momA -= 1; return 'People like that you stay calm.'; } },
     ] },
-  { id: 'farmmarch', icon: '🚜', title: 'Farmers March to Delhi',
-    text: () => 'Thousands of farmers are marching to Delhi demanding better crop prices.',
+  { id: 'farmmarch', icon: '🚜', title: 'Farmers Are Marching',
+    text: () => 'Thousands of farmers walk to Delhi. They want better prices for crops.',
     choices: () => [
-      { label: 'Join the march', hint: 'Farmers +4, Business −2', run: () => { appeal('farmers', 4); appeal('business', -2); return 'Photos of you marching with farmers go everywhere.'; } },
-      { label: 'Meet their leaders privately', hint: 'Farmers +2', run: () => { appeal('farmers', 2); return 'Farm unions appreciate the quiet meeting.'; } },
-      { label: 'Stay away', hint: 'Farmers −2, Business +1', run: () => { appeal('farmers', -2); appeal('business', 1); return 'Farm unions call you indifferent.'; } },
+      { label: '🚶 Walk with them', run: () => { appeal('farmers', 4); appeal('business', -2); return 'Farmers love you! 🌾'; } },
+      { label: '🤝 Meet their leaders', run: () => { appeal('farmers', 2); return 'Farmers are happy you listened.'; } },
+      { label: '🙈 Stay away', run: () => { appeal('farmers', -2); appeal('business', 1); return 'Farmers feel ignored. 😕'; } },
     ] },
-  { id: 'violence', icon: '🔥', title: 'Violence After Local Clash',
+  { id: 'violence', icon: '🔥', title: 'Fighting in a Town',
     ctx: () => ({ s: bigState().id }),
-    text: (G, c) => `A local dispute in ${stateById(c.s).name} has spiralled into violence. Tensions are high.`,
+    text: (G, c) => `People are fighting in ${stateById(c.s).name}. Everyone is scared.`,
     choices: (G, c) => [
-      { label: 'Visit victims, appeal for peace', cost: 5, hint: `Trust +4, ${stateById(c.s).name} +2`, run: () => { tr(4); ground(c.s, 2); return 'Your peace march earns praise across communities.'; } },
-      { label: 'Blame the state government', hint: 'Momentum +1, trust −3', run: () => { mom(1); tr(-3); return 'Your attack gets coverage but looks opportunistic.'; } },
-      { label: 'Stay silent', hint: 'Trust −2', run: () => { tr(-2); return 'Your silence is noticed.'; } },
+      { label: '🕊️ Go and ask for peace', cost: 5, run: () => { tr(4); ground(c.s, 2); return 'Your peace walk calms everyone. 🕊️'; } },
+      { label: '👉 Blame the state leaders', run: () => { mom(1); tr(-3); return 'Some people think that was mean.'; } },
+      { label: '🤐 Say nothing', run: () => { tr(-2); return 'People noticed you were quiet.'; } },
     ] },
-  { id: 'ecnotice', icon: '⚖️', title: 'Election Commission Notice',
-    text: () => 'The Election Commission says one of your speeches broke the Model Code of Conduct.',
+  { id: 'ecnotice', icon: '⚖️', title: 'Referee Warning!',
+    text: () => 'The Election Commission (the referee) says you broke a rule in your speech.',
     choices: () => [
-      { label: 'Apologise and comply', hint: 'Trust +2, momentum −1', run: () => { tr(2); mom(-1); return 'You apologise. The story dies quickly.'; } },
-      { label: 'Defy it, call the EC biased', hint: 'Momentum +1, trust −4', run: () => { mom(1); tr(-4); return 'Your base loves it. Neutral voters do not.'; } },
+      { label: '🙏 Say sorry', run: () => { tr(2); mom(-1); return 'Saying sorry was the right thing.'; } },
+      { label: '😠 Argue with the referee', run: () => { mom(1); tr(-4); return 'Your fans liked it. Others did not.'; } },
     ] },
-  { id: 'donor', icon: '💼', title: 'A Generous Donor',
-    text: () => 'A mining magnate offers ₹100 cr — and hints he would like a coal block later.',
+  { id: 'donor', icon: '💼', title: 'A Rich Man Offers Money',
+    text: () => 'A rich man offers ₹100 crore. But he wants a favour later…',
     choices: () => [
-      { label: 'Accept the money', hint: '+₹100 cr, trust −3, risky', run: () => { G.camp.funds += 100; tr(-3); G.camp.donorRisk += 2; return '₹100 cr lands in party accounts.'; } },
-      { label: 'Refuse publicly', hint: 'Trust +3', run: () => { tr(3); return 'Your refusal makes headlines. Clean politics!'; } },
+      { label: '💰 Take the money', run: () => { G.camp.funds += 100; tr(-3); G.camp.donorRisk += 2; return 'You got ₹100 crore. Hope it is okay… 🤔'; } },
+      { label: '✋ Say no', run: () => { tr(3); return 'People trust you more! 👍'; } },
     ] },
-  { id: 'debate', icon: '🎙️', title: 'Debate Challenge',
-    text: () => `${RIVALS.A.leader} challenges you to a live TV debate.`,
+  { id: 'debate', icon: '🎙️', title: 'TV Debate Challenge',
+    text: () => 'The RSP leader wants to debate you on live TV.',
     choices: () => [
-      { label: 'Accept the debate', hint: 'Big swing — better with high trust', run: () => rand() < .3 + G.trust / 150 ? (mom(4), tr(2), 'You win the debate decisively! Momentum surges.') : (mom(-3), 'You stumble on economic questions. A bad night.') },
-      { label: 'Decline', hint: 'Momentum −1', run: () => { mom(-1); return 'Rivals mock you as scared of debate.'; } },
+      { label: '💪 Accept!', run: () => rand() < .3 + G.trust / 150 ? (mom(4), tr(2), 'You won the debate! 🏆') : (mom(-3), 'You got nervous. Bad night. 😓') },
+      { label: '🙅 Say no', run: () => { mom(-1); return 'Some say you were scared.'; } },
     ] },
-  { id: 'paperleak', icon: '📝', title: 'Exam Paper Leak',
-    text: () => 'A national entrance-exam paper has leaked. Lakhs of students are furious.',
+  { id: 'paperleak', icon: '📝', title: 'Exam Paper Leaked',
+    text: () => 'A big exam paper leaked. Students are very upset.',
     choices: () => [
-      { label: 'Promise a strict anti-leak law', hint: 'Youth +4', run: () => { appeal('youth', 4); return 'Students rally behind your promise.'; } },
-      { label: 'Lead student protests', cost: 6, hint: 'Youth +3, momentum +2', run: () => { appeal('youth', 3); mom(2); return 'You join students on the streets. Huge coverage.'; } },
+      { label: '📜 Promise a strict new rule', run: () => { appeal('youth', 4); return 'Students cheer for you! 🎓'; } },
+      { label: '✊ Stand with students', cost: 6, run: () => { appeal('youth', 3); mom(2); return 'You are on every TV channel!'; } },
     ] },
-  { id: 'flood', icon: '🌊', title: 'Floods Devastate a State',
+  { id: 'flood', icon: '🌊', title: 'Big Floods!',
     ctx: () => ({ s: pick(['AS', 'BR', 'KL', 'MH', 'OD', 'WB']) }),
-    text: (G, c) => `Severe floods in ${stateById(c.s).name}. Lakhs are displaced.`,
+    text: (G, c) => `Floods in ${stateById(c.s).name}. Many people lost their homes.`,
     choices: (G, c) => [
-      { label: 'Pause campaign, lead relief work', cost: 15, hint: `Trust +3, ${stateById(c.s).name} +5`, run: () => { tr(3); ground(c.s, 5); return 'Your volunteers are first on the ground. People remember.'; } },
-      { label: 'Send a party relief team', cost: 4, hint: `${stateById(c.s).name} +1`, run: () => { ground(c.s, 1); return 'Party workers distribute food packets.'; } },
+      { label: '🛶 Go and help them', cost: 15, run: () => { tr(3); ground(c.s, 5); return 'You helped first. People will remember! ❤️'; } },
+      { label: '📦 Send food packets', cost: 4, run: () => { ground(c.s, 1); return 'Food reached the families.'; } },
     ] },
-  { id: 'ticketsale', icon: '🎫', title: 'Ticket-for-Cash Sting',
-    text: () => 'A TV sting shows party officials asking for money in exchange for election tickets.',
+  { id: 'ticketsale', icon: '🎫', title: 'Cheating in Your Team',
+    text: () => 'Some of your team members were caught taking money.',
     choices: () => [
-      { label: 'Expel them immediately', hint: 'Trust +3, cadre −8', run: () => { tr(3); G.camp.cadre = Math.max(10, G.camp.cadre - 8); return 'Swift action limits the damage.'; } },
-      { label: 'Call the sting doctored', hint: 'Trust −5', run: () => { tr(-5); return 'Few believe your denial.'; } },
+      { label: '🚪 Kick them out', run: () => { tr(3); G.camp.cadre = Math.max(10, G.camp.cadre - 8); return 'Good job! You kept your team clean.'; } },
+      { label: '🙊 Say it is not true', run: () => { tr(-5); return 'Not many people believe you. 😬'; } },
     ] },
-  { id: 'trend', icon: '📈', title: 'You Are Trending!',
-    text: () => `#${G.leader.split(' ')[0]}ForPM is trending after a heartfelt speech goes viral.`,
-    choices: () => [{ label: 'Ride the wave', hint: 'Momentum +2', run: () => { mom(2); return 'Your speech is shared crores of times.'; } }] },
-  { id: 'founders', icon: '🚀', title: "Startup Founders' Open Letter",
-    text: () => 'Top startup founders publish a letter asking parties for a clear plan on jobs and innovation.',
+  { id: 'trend', icon: '📈', title: 'You Are Famous Online!',
+    text: () => 'Your speech went viral. Everyone is sharing it!',
+    choices: () => [{ label: '🎉 Yay!', run: () => { mom(2); return 'Crores of people saw your speech!'; } }] },
+  { id: 'founders', icon: '🚀', title: 'Young Inventors Want Help',
+    text: () => 'Young people who start new companies ask: will you help us?',
     choices: () => [
-      { label: 'Meet them and unveil a startup plan', hint: 'Youth +3, Business +2', run: () => { appeal('youth', 3); appeal('business', 2); return 'Founders praise your plan.'; } },
-      { label: 'Focus on rural voters instead', hint: 'Farmers +1, Youth −1', run: () => { appeal('farmers', 1); appeal('youth', -1); return 'You stick to the rural message.'; } },
+      { label: '🚀 Yes, let us build!', run: () => { appeal('youth', 3); appeal('business', 2); return 'Young inventors love your plan!'; } },
+      { label: '🌾 Focus on villages', run: () => { appeal('farmers', 1); appeal('youth', -1); return 'You talk about villages instead.'; } },
     ] },
-  { id: 'donorscandal', icon: '💣', title: 'Donor Scandal Erupts',
+  { id: 'donorscandal', icon: '💣', title: 'The Rich Man Wants His Favour',
     when: G => G.camp.donorRisk >= 2,
-    text: () => 'Journalists reveal that one of your big donors got a state contract under your party. The press is relentless.',
+    text: () => 'News says your rich donor got special help. People are angry.',
     choices: () => [
-      { label: 'Return the donation', cost: 40, hint: '₹40 cr, trust −2', run: () => { tr(-2); G.camp.donorRisk = 0; return 'You return the money. Damage contained.'; } },
-      { label: 'Tough it out', hint: 'Trust −7, momentum −2', run: () => { tr(-7); mom(-2); G.camp.donorRisk = 0; return 'The scandal runs for a week.'; } },
+      { label: '💸 Give the money back', cost: 40, run: () => { tr(-2); G.camp.donorRisk = 0; return 'You returned the money. Phew.'; } },
+      { label: '😬 Just wait', run: () => { tr(-7); mom(-2); G.camp.donorRisk = 0; return 'The news stayed for a whole week. Ouch.'; } },
     ] },
 ];
 
 const GOV_EVENTS = [
-  { id: 'monsoon', icon: '☀️', title: 'Monsoon Fails', weight: 2,
-    text: () => 'Rainfall is 25% below normal. Crops are wilting and food prices are rising.',
+  { id: 'monsoon', icon: '☀️', title: 'No Rain!', weight: 2,
+    text: () => 'The rains did not come. Crops are drying up and food is getting costly.',
     choices: () => [
-      { label: 'Drought relief package', hint: '0.3% GDP · Farmers +5 · food inflation eased', run: () => { oneTime(.3); mod('farmers', 5); G.eco.food += .8; return 'Relief reaches drought-hit districts.'; } },
-      { label: 'Ban food exports, import pulses', hint: 'Farmers −6 · Middle +2 · inflation low', run: () => { G.eco.food += .3; mod('farmers', -6); mod('middle', 2); return 'Prices are stable, but farmers lose export income.'; } },
-      { label: 'Let markets adjust', hint: 'Farmers −8 · Poor −4 · inflation spike', run: () => { G.eco.food += 1.6; mod('farmers', -8); mod('poor', -4); return 'Food inflation spikes.'; } },
+      { label: '💧 Help the farmers', run: () => { oneTime(.3); mod('farmers', 5); G.eco.food += .8; return 'Farmers got help. 🌾'; } },
+      { label: '🚢 Buy food from other countries', run: () => { G.eco.food += .3; mod('farmers', -6); mod('middle', 2); return 'Food stays cheap, but farmers are sad.'; } },
+      { label: '🤷 Do nothing', run: () => { G.eco.food += 1.6; mod('farmers', -8); mod('poor', -4); return 'Food prices went way up. 😟'; } },
     ] },
-  { id: 'oil', icon: '🛢️', title: 'Oil Price Shock', weight: 1.5,
-    text: () => 'War in the Gulf sends crude to $130 a barrel. India imports 85% of its oil.',
+  { id: 'oil', icon: '🛢️', title: 'Petrol Is Costly!', weight: 1.5,
+    text: () => 'Oil from other countries suddenly costs a lot more.',
     choices: () => [
-      { label: 'Cut fuel excise duty', hint: 'Revenue −0.4% GDP · Middle +2 · less inflation', run: () => { revOnce(-.4, 4); G.eco.oil += .6; mod('middle', 2); return 'Petrol prices held steady at a cost to the treasury.'; } },
-      { label: 'Pass prices on to consumers', hint: 'Inflation spike · Middle −4 · Poor −2', run: () => { G.eco.oil += 1.8; mod('middle', -4); mod('poor', -2); return 'Petrol crosses ₹130/litre. Commuters are angry.'; } },
-      { label: 'Buy discounted oil from a sanctioned seller', hint: 'Cheaper oil, diplomatic risk', run: () => { G.eco.oil += .5; if (rand() < .4) { growthShock(-.4, 2); mod('business', -3); return 'Cheap oil flows, but Western partners slap tariffs on Indian goods.'; } return 'Discounted barrels keep prices in check. A diplomatic win.'; } },
+      { label: '⛽ Cut petrol tax', run: () => { revOnce(-.4, 4); G.eco.oil += .6; mod('middle', 2); return 'Petrol stays cheaper. The government earns less.'; } },
+      { label: '💸 Let prices go up', run: () => { G.eco.oil += 1.8; mod('middle', -4); mod('poor', -2); return 'Petrol is costly. People are upset.'; } },
+      { label: '🤝 Buy cheap oil from a far country', run: () => { G.eco.oil += .5; if (rand() < .4) { growthShock(-.4, 2); mod('business', -3); return 'Cheap oil, but some countries got angry with us.'; } return 'Smart deal! Cheap oil for India. 👍'; } },
     ] },
-  { id: 'globalrec', icon: '🌍', title: 'Global Recession', weight: 1,
-    text: () => 'The US and Europe slide into recession. Indian exports are falling fast.',
+  { id: 'globalrec', icon: '🌍', title: 'The World Is Slowing Down', weight: 1,
+    text: () => 'Other countries are buying less from India. Factories are worried.',
     choices: () => [
-      { label: 'Fiscal stimulus', hint: '1% GDP · growth protected · Business +3', run: () => { oneTime(1.0); G.eco.global -= .8; mod('business', 3); mod('workers', 2); return 'A big stimulus cushions the blow.'; } },
-      { label: 'Stay the course', hint: 'Growth hit · deficit safe', run: () => { G.eco.global -= 1.8; return 'You hold the line on the deficit. Growth suffers.'; } },
-      { label: 'Let the rupee fall to boost exports', hint: 'Smaller growth hit · imported inflation', run: () => { G.eco.global -= 1.1; G.eco.oil += .6; mod('business', 2); return 'The rupee falls 8%. Exporters cheer; importers groan.'; } },
+      { label: '💰 Spend to help factories', run: () => { oneTime(1.0); G.eco.global -= .8; mod('business', 3); mod('workers', 2); return 'Factories keep running. 🏭'; } },
+      { label: '🧘 Wait and see', run: () => { G.eco.global -= 1.8; return 'Things slowed down a lot.'; } },
+      { label: '📦 Sell cheaper to the world', run: () => { G.eco.global -= 1.1; G.eco.oil += .6; mod('business', 2); return 'Sales went up, but some prices rose.'; } },
     ] },
-  { id: 'border', icon: '🏔️', title: 'Border Standoff', weight: 1,
-    text: () => 'Troops of a neighbouring country have crossed into disputed territory in the Himalayas.',
+  { id: 'border', icon: '🏔️', title: 'Trouble at the Border', weight: 1,
+    text: () => 'Soldiers from another country came into our mountains.',
     choices: () => [
-      { label: 'Military build-up', hint: 'Costs 0.25% GDP · outcome depends on defence budget', run: () => { oneTime(.25); if (G.eco.b.defence >= 2.0 || rand() < .4) { modAll(4); tr(2); return 'Our forces stand firm and the intruders pull back. The nation rallies behind you!'; } modAll(-3); return 'Under-equipped forces cannot force a pullback. Critics question defence cuts.'; } },
-      { label: 'Diplomatic talks', hint: 'Usually works, can look weak', run: () => { if (rand() < .6) { tr(2); mod('business', 2); return 'Quiet diplomacy defuses the crisis.'; } mod('middle', -4); mod('youth', -3); return 'Talks drag on. You are called weak on TV.'; } },
-      { label: 'Ban their apps and imports', hint: 'Middle/Youth +3 · Business −3 · some inflation', run: () => { mod('youth', 3); mod('middle', 3); mod('business', -3); inflShock(.3, 2); return 'Economic retaliation is popular, but prices rise.'; } },
+      { label: '🪖 Send our army', run: () => { oneTime(.25); if (G.eco.b.defence >= 2.0 || rand() < .4) { modAll(4); tr(2); return 'They went back! India is proud of you! 🇮🇳'; } modAll(-3); return 'Our army needed better tools. They did not go back.'; } },
+      { label: '🕊️ Talk to them', run: () => { if (rand() < .6) { tr(2); mod('business', 2); return 'Talking worked! Peace is back. 🕊️'; } mod('middle', -4); mod('youth', -3); return 'Talks are slow. Some say you are weak.'; } },
+      { label: '🚫 Stop buying their things', run: () => { mod('youth', 3); mod('middle', 3); mod('business', -3); inflShock(.3, 2); return 'People like it, but some things cost more now.'; } },
     ] },
-  { id: 'bankcrisis', icon: '🏦', title: 'Major Bank Collapses', weight: 1.2, when: G => !G.gov.flags.banksSafe,
-    text: () => 'A large private bank is insolvent after years of bad loans. Depositors are queueing outside branches.',
+  { id: 'bankcrisis', icon: '🏦', title: 'A Bank Is Breaking!', weight: 1.2, when: G => !G.gov.flags.banksSafe,
+    text: () => 'A big bank has run out of money. People are scared for their savings.',
     choices: () => [
-      { label: 'Bail out depositors', hint: '0.8% GDP · Middle +2', run: () => { oneTime(.8); mod('middle', 2); return 'Deposits are guaranteed. Panic subsides.'; } },
-      { label: 'Merge it into a state bank', pc: 1, hint: '1 PC · small growth hit', run: () => { growthShock(-.4, 2); mod('middle', -2); return 'A forced merger stabilises things.'; } },
-      { label: 'Let it fail', hint: 'Growth −1.2 · Middle −8 · markets crash', run: () => { growthShock(-1.2, 2); G.eco.sensex *= .9; mod('middle', -8); mod('business', -5); return 'Savers lose money. Markets tumble.'; } },
+      { label: '🛟 Save people\'s money', run: () => { oneTime(.8); mod('middle', 2); return 'Everyone\'s savings are safe. 😌'; } },
+      { label: '🔗 Join it with a strong bank', pc: 1, run: () => { growthShock(-.4, 2); mod('middle', -2); return 'The banks joined. Things are calmer.'; } },
+      { label: '🤷 Let it break', run: () => { growthShock(-1.2, 2); G.eco.sensex *= .9; mod('middle', -8); mod('business', -5); return 'People lost money. Very sad. 😢'; } },
     ] },
-  { id: 'scandal', icon: '🕵️', title: 'Minister in Bribery Sting', weight: 1.4,
-    text: (G) => G.gov.flags.lokpal ? 'The new Lokpal has caught a minister taking bribes on camera.' : 'A TV channel catches a cabinet minister taking a bribe on camera.',
+  { id: 'scandal', icon: '🕵️', title: 'Minister Caught Cheating!', weight: 1.4,
+    text: () => 'A camera caught one of your ministers taking money.',
     choices: (G) => [
-      { label: 'Sack the minister', hint: 'Trust +5 · may upset an ally', run: () => { tr(5); if (G.gov.allies.length && rand() < .5) { const a = pick(G.gov.allies); a.sat = clamp(a.sat - 12, 0, 100); return `You sack the minister — an ${a.short} leader. Trust up, ${a.short} sulks.`; } return 'You sack the minister within hours. Public applauds.'; } },
-      { label: 'Order an inquiry', pc: 2, hint: '2 PC · Trust +1', run: () => { tr(1); return 'An inquiry is ordered. The story slowly fades.'; } },
-      { label: 'Defend the minister', hint: 'Trust −8 · all −2', run: () => { tr(-8); modAll(-2); return 'Defending him looks terrible.'; } },
+      { label: '🚪 Remove him', run: () => { tr(5); if (G.gov.allies.length && rand() < .5) { const a = pick(G.gov.allies); a.sat = clamp(a.sat - 12, 0, 100); return `Good! But he was from ${a.short}, and they are a bit upset.`; } return 'Everyone claps! You are fair. 👏'; } },
+      { label: '🔍 Check first', pc: 2, run: () => { tr(1); return 'A team is checking. People wait.'; } },
+      { label: '🛡️ Protect him', run: () => { tr(-8); modAll(-2); return 'People are angry that you protected a cheater. 😠'; } },
     ] },
-  { id: 'boom', icon: '🐂', title: 'Stock Market Euphoria', weight: .8,
-    text: () => 'The Sensex hits record highs as foreign money pours in.',
+  { id: 'boom', icon: '🐂', title: 'Share Market Is Booming!', weight: .8,
+    text: () => 'Company shares are going up and up!',
     choices: () => [
-      { label: 'Raise capital gains tax', hint: 'Revenue +0.15% GDP · Business −4', run: () => { G.eco.b.progRev = (G.eco.b.progRev || 0) + .15; mod('business', -4); mod('middle', -2); return 'Markets dip on the new tax.'; } },
-      { label: "Celebrate India's growth story", hint: 'Business +2', run: () => { G.eco.sensex *= 1.04; mod('business', 2); return 'Global investors take note.'; } },
+      { label: '💰 Add a small tax on profits', run: () => { G.eco.b.progRev = (G.eco.b.progRev || 0) + .15; mod('business', -4); mod('middle', -2); return 'More money for the government. Business is grumpy.'; } },
+      { label: '🎉 Celebrate!', run: () => { G.eco.sensex *= 1.04; mod('business', 2); return 'The world sees India growing! 📈'; } },
     ] },
-  { id: 'pandemic', icon: '🦠', title: 'New Virus Spreading', weight: .3, when: G => G.gov.q > 2,
-    text: () => 'A new respiratory virus is spreading fast in major cities. Hospitals are filling up.',
+  { id: 'pandemic', icon: '🦠', title: 'A New Sickness Is Spreading', weight: .3, when: G => G.gov.q > 2,
+    text: () => 'A new germ is making people sick. Hospitals are filling up.',
     choices: (G) => [
-      { label: 'Strict national lockdown', hint: 'Growth −5 for 2 qtrs · Poor & Workers −6 · Trust +3', run: () => { growthShock(-5, 2); oneTime(.5); mod('poor', -6); mod('workers', -6); tr(3); return 'The country shuts down. Cases fall, but livelihoods suffer.'; } },
-      { label: 'Targeted containment + vaccines', hint: '0.6% GDP · works if health system is strong', run: () => { oneTime(.6); growthShock(-1.5, 2); if (G.eco.humanStock > 1.1) { modAll(3); return 'A strong health system contains the outbreak. A model for the world!'; } modAll(-4); return 'Weak hospitals are overwhelmed. Painful scenes.'; } },
-      { label: 'Keep the economy open', hint: 'Growth −0.8 · all −7 · Trust −5', run: () => { growthShock(-.8, 2); modAll(-7); tr(-5); return 'The economy hums, but the human cost is grim.'; } },
+      { label: '🏠 Everyone stay home', run: () => { growthShock(-5, 2); oneTime(.5); mod('poor', -6); mod('workers', -6); tr(3); return 'Fewer people got sick, but many lost work.'; } },
+      { label: '💉 Vaccines and care', run: () => { oneTime(.6); growthShock(-1.5, 2); if (G.eco.humanStock > 1.1) { modAll(3); return 'Great hospitals saved lives! 🏥'; } modAll(-4); return 'Hospitals were too weak. It was hard.'; } },
+      { label: '🏃 Keep working', run: () => { growthShock(-.8, 2); modAll(-7); tr(-5); return 'Many people got sick. Very sad.'; } },
     ] },
-  { id: 'cyclone', icon: '🌀', title: 'Super Cyclone', weight: 1,
+  { id: 'cyclone', icon: '🌀', title: 'Big Storm Coming!', weight: 1,
     ctx: () => ({ s: pick(COASTAL) }),
-    text: (G, c) => `A super cyclone is about to hit ${stateById(c.s).name}.`,
+    text: (G, c) => `A huge storm is coming to ${stateById(c.s).name}.`,
     choices: (G, c) => [
-      { label: 'Evacuate early, massive relief', hint: '0.1% GDP · Poor +2 · ally pleased', run: () => { oneTime(.1); mod('poor', 2); allySat(10, c.s); tr(2); return 'Early evacuation saves thousands of lives.'; } },
-      { label: 'Standard disaster response', hint: 'Poor −2', run: () => { mod('poor', -2); allySat(-6, c.s); return 'Relief is slow in remote villages.'; } },
+      { label: '🚌 Move people to safety early', run: () => { oneTime(.1); mod('poor', 2); allySat(10, c.s); tr(2); return 'Thousands of lives saved! ❤️'; } },
+      { label: '🙂 Normal help', run: () => { mod('poor', -2); allySat(-6, c.s); return 'Help was slow in far villages.'; } },
     ] },
-  { id: 'farmprotest', icon: '🚜', title: 'Farmers Besiege Delhi', scheduled: true,
-    text: () => 'Lakhs of farmers have camped at Delhi\'s borders against your farm/land reforms.',
+  { id: 'farmprotest', icon: '🚜', title: 'Farmers Are Angry!', scheduled: true,
+    text: () => 'Lots of farmers are sitting outside Delhi. They do not like your new farm rule.',
     choices: (G) => [
-      { label: 'Repeal the law', hint: 'Farmers +8 · Trust −4 · lose reform gains', run: () => { const id = G.gov.passed.includes('farmmkt') ? 'farmmkt' : 'land'; G.gov.passed = G.gov.passed.filter(x => x !== id); G.eco.reformBoost = Math.max(0, G.eco.reformBoost - .2); mod('farmers', 8); mod('business', -3); tr(-4); return 'You repeal the law. Farmers celebrate; reformers despair.'; } },
-      { label: 'Form a negotiation committee', pc: 3, hint: '3 PC · Farmers +3', run: () => { mod('farmers', 3); return 'Talks begin. Protesters slowly go home.'; } },
-      { label: 'Stand firm', hint: 'Farmers −8 · risky', run: () => { mod('farmers', -8); if (rand() < .3) { tr(-5); modAll(-2); return 'Police clash with farmers. Ugly images shock the nation.'; } return 'You hold firm. The protest drags on.'; } },
+      { label: '↩️ Take the rule back', run: () => { const id = G.gov.passed.includes('farmmkt') ? 'farmmkt' : 'land'; G.gov.passed = G.gov.passed.filter(x => x !== id); G.eco.reformBoost = Math.max(0, G.eco.reformBoost - .2); mod('farmers', 8); mod('business', -3); tr(-4); return 'Farmers go home happy. 🌾'; } },
+      { label: '🤝 Talk with them', pc: 3, run: () => { mod('farmers', 3); return 'Talks started. Farmers slowly go home.'; } },
+      { label: '💪 Do not change', run: () => { mod('farmers', -8); if (rand() < .3) { tr(-5); modAll(-2); return 'There was pushing and shouting. Not good. 😟'; } return 'You stayed strong. Farmers are still upset.'; } },
     ] },
-  { id: 'strike', icon: '✊', title: 'Nationwide General Strike', scheduled: true,
-    text: () => 'Twenty crore workers strike against the Labour Codes. Factories and ports are shut.',
+  { id: 'strike', icon: '✊', title: 'Workers Stop Working!', scheduled: true,
+    text: () => 'Workers are on strike. They do not like the new factory rules.',
     choices: () => [
-      { label: 'Add worker safeguards', hint: 'Workers +6 · Business −3', run: () => { mod('workers', 6); mod('business', -3); return 'Unions call off the strike.'; } },
-      { label: 'Stand firm', hint: 'Growth hit · Workers −5', run: () => { growthShock(-.6, 1); mod('workers', -5); return 'The strike fizzles after a costly week.'; } },
+      { label: '🤝 Make rules kinder', run: () => { mod('workers', 6); mod('business', -3); return 'Workers go back to work. 🏭'; } },
+      { label: '💪 Do not change', run: () => { growthShock(-.6, 1); mod('workers', -5); return 'Factories stopped for a week.'; } },
     ] },
-  { id: 'fdi', icon: '🔬', title: 'Chipmaker Wants to Build in India', weight: 1,
-    text: () => 'A global chip giant is choosing between India and Vietnam for a ₹1 lakh crore fab.',
+  { id: 'fdi', icon: '🔬', title: 'Big Factory Wants to Come!', weight: 1,
+    text: () => 'A big company wants to build a chip factory. Will it choose India?',
     choices: () => [
-      { label: 'Offer big subsidies', hint: '0.15% GDP · Youth +4 · jobs', run: () => { oneTime(.15); mod('youth', 4); mod('business', 3); G.eco.unempMod -= .2; G.eco.reformBoost += .05; return 'The fab is coming to India! 50,000 jobs.'; } },
-      { label: 'Offer land and fast approvals only', hint: '50/50', run: () => { if (rand() < .5) { mod('youth', 3); G.eco.unempMod -= .15; return 'Fast approvals win the day. The fab picks India!'; } mod('youth', -2); return 'The company picks Vietnam.'; } },
-      { label: 'Decline — no corporate handouts', hint: 'Workers +1', run: () => { mod('workers', 1); return 'The fab goes elsewhere.'; } },
+      { label: '🎁 Give them help', run: () => { oneTime(.15); mod('youth', 4); mod('business', 3); G.eco.unempMod -= .2; G.eco.reformBoost += .05; return 'They chose India! 50,000 new jobs! 🎉'; } },
+      { label: '📝 Give land only', run: () => { if (rand() < .5) { mod('youth', 3); G.eco.unempMod -= .15; return 'Yes! They chose India! 🎉'; } mod('youth', -2); return 'They went to another country. 😞'; } },
+      { label: '🙅 No thanks', run: () => { mod('workers', 1); return 'The factory went somewhere else.'; } },
     ] },
-  { id: 'cricket', icon: '🏏', title: 'India Wins the World Cup!', weight: .6,
-    text: () => 'India has won the Cricket World Cup! The nation is celebrating.',
+  { id: 'cricket', icon: '🏏', title: 'India Won the World Cup!', weight: .6,
+    text: () => 'India won the Cricket World Cup! Everyone is dancing!',
     choices: () => [
-      { label: 'Host a grand reception', hint: 'All +2, Youth +2', run: () => { modAll(2); mod('youth', 2); return 'Selfies with the team go viral.'; } },
-      { label: 'Congratulate them on social media', hint: 'All +1', run: () => { modAll(1); return 'A warm message for the team.'; } },
+      { label: '🎉 Big party for the team', run: () => { modAll(2); mod('youth', 2); return 'Selfies with the team! Everyone is happy! 🏏'; } },
+      { label: '👏 Say well done', run: () => { modAll(1); return 'Well done, team India!'; } },
     ] },
-  { id: 'summit', icon: '🌐', title: 'India Hosts a Global Summit', weight: .7,
-    text: () => 'World leaders are coming to New Delhi for a major summit.',
+  { id: 'summit', icon: '🌐', title: 'World Leaders Are Visiting', weight: .7,
+    text: () => 'Leaders from many countries are coming to New Delhi.',
     choices: () => [
-      { label: 'Lavish showcase of India', hint: '0.05% GDP · Middle & Business +3', run: () => { oneTime(.05); mod('middle', 3); mod('business', 3); tr(1); return 'A dazzling summit puts India on the world stage.'; } },
-      { label: 'Keep it modest', hint: 'Trust +1', run: () => { tr(1); return 'A businesslike summit.'; } },
+      { label: '✨ Show India\'s best side', run: () => { oneTime(.05); mod('middle', 3); mod('business', 3); tr(1); return 'The world is amazed by India! ✨'; } },
+      { label: '🙂 Keep it simple', run: () => { tr(1); return 'A nice, simple meeting.'; } },
     ] },
-  { id: 'examleak', icon: '📝', title: 'Exam Paper Leak', weight: 1,
-    text: () => 'The national medical entrance exam paper has leaked. 20 lakh students are affected.',
+  { id: 'examleak', icon: '📝', title: 'Exam Paper Leaked', weight: 1,
+    text: () => 'The big doctor exam paper leaked. Students are crying.',
     choices: () => [
-      { label: 'Re-exam + tough anti-leak law', pc: 1, hint: '1 PC · Youth +5', run: () => { mod('youth', 5); return 'Swift action calms students.'; } },
-      { label: 'Blame state agencies', hint: 'Youth −4', run: () => { mod('youth', -4); return 'Students march against the government.'; } },
+      { label: '📝 New exam + strict rule', pc: 1, run: () => { mod('youth', 5); return 'Students are thankful. 🎓'; } },
+      { label: '👉 Blame others', run: () => { mod('youth', -4); return 'Students are angry with you.'; } },
     ] },
-  { id: 'allydemand', icon: '📜', title: 'Ally Demands Special Status', weight: 1, when: G => G.gov.allies.some(a => stateById(a.key)),
+  { id: 'allydemand', icon: '📜', title: 'Your Friend Wants Something', weight: 1, when: G => G.gov.allies.some(a => stateById(a.key)),
     ctx: (G) => ({ key: pick(G.gov.allies.filter(a => stateById(a.key))).key }),
-    text: (G, c) => { const a = G.gov.allies.find(x => x.key === c.key); return a ? `The ${a.name} demands special category status and funds for ${stateById(c.key).name}.` : 'An ally makes demands.'; },
+    text: (G, c) => { const a = G.gov.allies.find(x => x.key === c.key); return a ? `Your friend ${a.short} wants extra money for ${stateById(c.key).name}.` : 'A friend wants something.'; },
     choices: (G, c) => [
-      { label: 'Grant a special package', hint: '0.12% GDP · ally +20 · other allies −3', run: () => { oneTime(.12); allySat(-3); allySat(23, c.key); return 'The package is announced. Other states grumble.'; } },
-      { label: 'Refuse', hint: 'Ally −18', run: () => { allySat(-18, c.key); return 'Your ally is furious.'; } },
+      { label: '🎁 Give it', run: () => { oneTime(.12); allySat(-3); allySat(23, c.key); return 'Your friend is happy! Others are a little jealous.'; } },
+      { label: '🙅 Say no', run: () => { allySat(-18, c.key); return 'Your friend is upset. 😠'; } },
     ] },
-  { id: 'prices', icon: '🧅', title: 'Onion & Tomato Prices Soar', weight: 1.5, when: G => G.eco.infl > 6,
-    text: () => 'Onions at ₹120/kg. Every TV channel is running the story.',
+  { id: 'prices', icon: '🧅', title: 'Onions Are So Costly!', weight: 1.5, when: G => G.eco.infl > 6,
+    text: () => 'Onions and tomatoes cost too much. Every family is worried.',
     choices: () => [
-      { label: 'Release buffer stocks, cap prices', hint: 'Inflation eases · Farmers −4', run: () => { inflShock(-.6, 2); mod('farmers', -4); return 'Prices cool down.'; } },
-      { label: 'Import onions', hint: 'Inflation eases a little · forex −10', run: () => { inflShock(-.4, 2); G.eco.forex -= 10; return 'Imported onions arrive.'; } },
-      { label: 'Do nothing', hint: 'Middle −4 · Poor −5', run: () => { mod('middle', -4); mod('poor', -5); return 'Kitchens feel the pinch.'; } },
+      { label: '📦 Sell from government stores', run: () => { inflShock(-.6, 2); mod('farmers', -4); return 'Prices came down. 🧅'; } },
+      { label: '🚢 Buy from other countries', run: () => { inflShock(-.4, 2); G.eco.forex -= 10; return 'More onions arrived.'; } },
+      { label: '🤷 Do nothing', run: () => { mod('middle', -4); mod('poor', -5); return 'Families are unhappy. 😟'; } },
     ] },
-  { id: 'rbiclash', icon: '🏛️', title: 'RBI Governor Resigns', weight: 2, when: G => G.gov.rbiCred < 70,
-    text: () => 'The RBI Governor resigns, citing government interference in monetary policy.',
+  { id: 'rbiclash', icon: '🏛️', title: 'The Bank Boss Quit', weight: 2, when: G => G.gov.rbiCred < 70,
+    text: () => 'The boss of India\'s main bank quit. He said you pushed him too much.',
     choices: () => [
-      { label: 'Appoint a respected economist', hint: 'RBI credibility +25 · Business +2', run: () => { G.gov.rbiCred = Math.min(100, G.gov.rbiCred + 25); mod('business', 2); return 'Markets welcome the appointment.'; } },
-      { label: 'Appoint a loyalist', hint: 'Rate cut · credibility falls · Trust −3', run: () => { G.gov.rbiCred = Math.max(0, G.gov.rbiCred - 10); G.eco.repo = Math.max(2.5, G.eco.repo - .25); G.eco.sensex *= .96; tr(-3); return 'Markets wobble at the pick.'; } },
+      { label: '🎓 Pick a wise expert', run: () => { G.gov.rbiCred = Math.min(100, G.gov.rbiCred + 25); mod('business', 2); return 'Everyone trusts the new boss. 👍'; } },
+      { label: '🤝 Pick your friend', run: () => { G.gov.rbiCred = Math.max(0, G.gov.rbiCred - 10); G.eco.repo = Math.max(2.5, G.eco.repo - .25); G.eco.sensex *= .96; tr(-3); return 'People are not sure about this. 🤔'; } },
     ] },
-  { id: 'automation', icon: '🤖', title: 'AI Wipes Out IT Jobs', weight: .8,
-    text: () => 'IT firms announce 3 lakh layoffs as AI automates software and back-office work.',
+  { id: 'automation', icon: '🤖', title: 'Robots Taking Jobs', weight: .8,
+    text: () => 'Computers and robots are doing work that people used to do.',
     choices: () => [
-      { label: 'National reskilling fund', hint: '0.1% GDP · Youth +3', run: () => { oneTime(.1); mod('youth', 3); return 'Lakhs enrol in AI reskilling.'; } },
-      { label: 'Tax automation', hint: 'Revenue +0.05 · Business −4 · Youth +2', run: () => { G.eco.b.progRev = (G.eco.b.progRev || 0) + .05; mod('business', -4); mod('youth', 2); return 'A first-of-its-kind automation tax.'; } },
-      { label: 'Let the market adjust', hint: 'Youth −3', run: () => { mod('youth', -3); G.eco.unempMod += .1; return 'Graduates struggle to find work.'; } },
+      { label: '📚 Teach people new skills', run: () => { oneTime(.1); mod('youth', 3); return 'Lots of people are learning new things! 📚'; } },
+      { label: '🤖 Tax the robots', run: () => { G.eco.b.progRev = (G.eco.b.progRev || 0) + .05; mod('business', -4); mod('youth', 2); return 'A robot tax! Companies are grumpy.'; } },
+      { label: '🤷 Do nothing', run: () => { mod('youth', -3); G.eco.unempMod += .1; return 'Some young people can\'t find work.'; } },
     ] },
-  { id: 'familyallegation', icon: '🗞️', title: 'Allegations Against Your Family', weight: .7,
-    text: () => 'The opposition alleges that a firm linked to your relative won highway contracts.',
+  { id: 'familyallegation', icon: '🗞️', title: 'They Say Your Family Cheated', weight: .7,
+    text: () => 'The other party says your relative got special deals.',
     choices: () => [
-      { label: 'Order an independent probe', pc: 1, hint: '1 PC · Trust +3', run: () => { tr(3); return 'The probe finds nothing. You come out cleaner.'; } },
-      { label: 'Sue for defamation', hint: 'Gamble', run: () => { if (rand() < .5) { tr(1); return 'The court sides with you.'; } tr(-5); return 'The lawsuit keeps the story alive for months.'; } },
-      { label: 'Ignore it', hint: 'Trust −4', run: () => { tr(-4); return 'Silence breeds suspicion.'; } },
+      { label: '🔍 Let a fair team check', pc: 1, run: () => { tr(3); return 'The check found nothing wrong! ✅'; } },
+      { label: '⚖️ Go to court', run: () => { if (rand() < .5) { tr(1); return 'The court said you are right!'; } tr(-5); return 'The court case went on and on…'; } },
+      { label: '🙈 Ignore it', run: () => { tr(-4); return 'People start to wonder…'; } },
     ] },
-  { id: 'harvest', icon: '🌽', title: 'Bumper Harvest', weight: .8,
-    text: () => 'Record wheat and rice crops! Granaries are overflowing.',
+  { id: 'harvest', icon: '🌽', title: 'Super Harvest!', weight: .8,
+    text: () => 'Farmers grew lots and lots of wheat and rice!',
     choices: () => [
-      { label: 'Increase government procurement', hint: '0.1% GDP · Farmers +5', run: () => { oneTime(.1); mod('farmers', 5); G.eco.food -= .4; return 'Farmers get good prices.'; } },
-      { label: 'Allow exports', hint: 'Farmers +3 · Business +1', run: () => { mod('farmers', 3); mod('business', 1); return 'Exports boom.'; } },
+      { label: '🛒 Government buys the extra', run: () => { oneTime(.1); mod('farmers', 5); G.eco.food -= .4; return 'Farmers got good money! 🌾'; } },
+      { label: '🚢 Sell to other countries', run: () => { mod('farmers', 3); mod('business', 1); return 'India sends food to the world!'; } },
     ] },
-  { id: 'stateelection', icon: '🗳️', title: 'State Assembly Elections', scheduled: true,
-    text: (G, c) => `Assembly elections in ${c.states.map(id => stateById(id).name).join(', ')}. Results decide Rajya Sabha seats and your momentum.`,
+  { id: 'stateelection', icon: '🗳️', title: 'Small Elections in States', scheduled: true,
+    text: (G, c) => `${c.states.map(id => stateById(id).name).join(', ')} are choosing their state leaders.`,
     choices: (G, c) => [
-      { label: 'Campaign hard', pc: 3, hint: '3 PC · best odds', run: () => stateElections(c.states, .12) },
-      { label: 'Moderate campaign', pc: 1, hint: '1 PC', run: () => stateElections(c.states, .03) },
-      { label: 'Stay above the fray', hint: 'Focus on governing', run: () => stateElections(c.states, -.08) },
+      { label: '💪 Work very hard', pc: 3, run: () => stateElections(c.states, .12) },
+      { label: '🙂 Work a little', pc: 1, run: () => stateElections(c.states, .03) },
+      { label: '🏛️ Stay in Delhi', run: () => stateElections(c.states, -.08) },
     ] },
-  { id: 'allythreat', icon: '⚠️', title: 'Ally Threatens to Quit', scheduled: true,
-    text: (G, c) => { const a = G.gov.allies.find(x => x.key === c.key); return a ? `The ${a.name} (${a.seats} MPs) says it will quit your coalition unless its demands are met.` : 'An ally is restless.'; },
+  { id: 'allythreat', icon: '⚠️', title: 'A Friend Wants to Leave!', scheduled: true,
+    text: (G, c) => { const a = G.gov.allies.find(x => x.key === c.key); return a ? `Your friend ${a.short} (${a.seats} seats) is unhappy and may leave you!` : 'A friend is unhappy.'; },
     choices: (G, c) => [
-      { label: 'Special package for their state', pc: 1, hint: '1 PC · 0.15% GDP · ally +30', run: () => { oneTime(.15); allySat(30, c.key); return 'The ally is placated.'; } },
-      { label: 'Give them a big ministry', pc: 2, hint: '2 PC · ally +25 · Trust −1', run: () => { allySat(25, c.key); tr(-1); return 'Their leader becomes a cabinet minister.'; } },
-      { label: 'Call their bluff', hint: '50/50', run: () => allyBluff(c.key) },
+      { label: '🎁 Give money for their state', pc: 1, run: () => { oneTime(.15); allySat(30, c.key); return 'Your friend is happy again! 🤝'; } },
+      { label: '🏛️ Make their leader a minister', pc: 2, run: () => { allySat(25, c.key); tr(-1); return 'They have a minister now. Happy!'; } },
+      { label: '🤞 Say "Please stay"', run: () => allyBluff(c.key) },
     ] },
-  { id: 'noconfidence', icon: '⚔️', title: 'No-Confidence Motion', scheduled: true,
-    text: () => `The opposition moves a no-confidence motion. You have ${govSeats()} MPs; ${MAJORITY} needed.`,
+  { id: 'noconfidence', icon: '⚔️', title: 'Big Vote: Should You Stay?', scheduled: true,
+    text: () => `The other parties want to remove you. You have ${govSeats()} seats. You need ${MAJORITY}.`,
     choices: () => [
-      { label: 'Win over small parties & independents', pc: 4, hint: '4 PC · decent odds', run: () => confidenceVote(.25) },
-      { label: 'Appeal to MPs\' conscience', hint: 'Risky', run: () => confidenceVote(0) },
-      { label: 'Resign and seek a fresh mandate', hint: 'Snap election', run: () => { governmentFalls('You resign to seek a fresh mandate.'); return 'Snap elections called.'; } },
+      { label: '🤝 Ask small parties for help', pc: 4, run: () => confidenceVote(.25) },
+      { label: '🤞 Hope for the best', run: () => confidenceVote(0) },
+      { label: '🗳️ Ask people to vote again', run: () => { governmentFalls('You asked for a new election.'); return 'New election coming!'; } },
     ] },
 ];
 
@@ -574,25 +577,24 @@ function stateElections(ids, bonus) {
   G.gov.rs = clamp(G.gov.rs + won.length * 3 - lost.length * 3, 40, 200);
   G.gov.stateElectionsWon += won.length; G.gov.stateElectionsLost += lost.length;
   if (won.length > lost.length) modAll(1); else if (lost.length > won.length) modAll(-1);
-  const name = id => stateById(id).name;
-  return `State results — won: ${won.map(name).join(', ') || 'none'}; lost: ${lost.map(name).join(', ') || 'none'}. Rajya Sabha now ${G.gov.rs}/${RS_TOTAL}.`;
+  return `You won ${won.length}, lost ${lost.length}. ${won.length >= lost.length ? '🎉' : '😕'}`;
 }
 
 function allyBluff(key) {
   const a = G.gov.allies.find(x => x.key === key);
-  if (!a) return 'The ally has already left.';
-  if (rand() < .5) { a.sat = clamp(a.sat + 5, 0, 100); return `${a.short} backs down. Your authority grows.`; }
+  if (!a) return 'They already left.';
+  if (rand() < .5) { a.sat = clamp(a.sat + 5, 0, 100); return `${a.short} stays with you! 🤝`; }
   G.gov.allies = G.gov.allies.filter(x => x !== a);
   if (govSeats() < MAJORITY) G.gov.pendingRisk = 'noconfidence';
-  return `${a.short} quits your coalition, taking ${a.seats} MPs with them!`;
+  return `${a.short} left you. 💔 You lost ${a.seats} seats.`;
 }
 
 function confidenceVote(bonus) {
   const seats = govSeats();
   const p = clamp(.3 + bonus + (overallApproval() - 45) / 80 + (seats - 250) / 80, .05, .95);
-  if (rand() < p) { G.gov.minority = true; tr(2); return `You survive the no-confidence motion! Outside support keeps you in power.`; }
-  governmentFalls('You lose the no-confidence vote.');
-  return 'Your government falls on the floor of the House.';
+  if (rand() < p) { G.gov.minority = true; tr(2); return 'You won the vote! You stay PM! 🎉'; }
+  governmentFalls('You lost the vote.');
+  return 'You lost the vote. New election! 🗳️';
 }
 </script>
 <script>
@@ -789,8 +791,8 @@ function projection(n = 12) {
 
 function canAct(cost, ap = 1) {
   const C = G.camp;
-  if (C.ap < ap) return 'No action points left this week';
-  if (C.funds < cost) return 'Not enough funds';
+  if (C.ap < ap) return 'No moves left this week';
+  if (C.funds < cost) return 'Not enough 💰 money';
   return null;
 }
 
@@ -913,13 +915,13 @@ function actionBlocked(id, stateId, opt) {
   const a = CAMPAIGN_ACTIONS[id], C = G.camp;
   const e = canAct(a.cost + (id === 'alliance' && opt ? 25 : 0));
   if (e) return e;
-  if (C.event) return 'Respond to the current event first';
+  if (C.event) return 'Answer the news card first';
   if (id === 'press' && C.pressDone) return 'Already held one this week';
   if (id === 'alliance') {
     const s = stateById(stateId);
     if (!s.reg) return 'No regional party here';
     if (C.alliances[stateId] === 'you') return 'Already your ally';
-    if ((C.cooldown[stateId] || 0) > C.week) return 'They need time before talking again';
+    if ((C.cooldown[stateId] || 0) > C.week) return 'They want a break. Try later!';
   }
   return null;
 }
@@ -937,9 +939,9 @@ function choosePromises(ids) {
 
 function addPromise(id) {
   const C = G.camp;
-  if (C.event) return { err: 'Respond to the current event first' };
+  if (C.event) return { err: 'Answer the news card first' };
   if (C.promises.length >= 5) return { err: 'Manifesto full (5 promises max)' };
-  if (C.ap < 1) return { err: 'No action points left this week' };
+  if (C.ap < 1) return { err: 'No moves left this week' };
   if (C.promises.includes(id)) return { err: 'Already promised' };
   C.ap--; C.promises.push(id);
   const p = PROMISES.find(x => x.id === id);
@@ -984,7 +986,7 @@ function rivalTurn() {
 
 function endWeek() {
   const C = G.camp;
-  if (C.event) return { err: 'Respond to the current event first' };
+  if (C.event) return { err: 'Answer the news card first' };
   rivalTurn();
   C.momentum *= .82; C.momA *= .82; C.momB *= .85;
   const income = Math.round(8 + C.cadre * .15);
@@ -1013,7 +1015,7 @@ function resolveCampaignEvent(i) {
   const C = G.camp, ev = CAMPAIGN_EVENTS.find(e => e.id === C.event.id);
   const ch = ev.choices(G, C.event.ctx)[i];
   if (!ch) return { err: 'No such choice' };
-  if (ch.cost && C.funds < ch.cost) return { err: 'Not enough funds' };
+  if (ch.cost && C.funds < ch.cost) return { err: 'Not enough 💰 money' };
   if (ch.cost) C.funds -= ch.cost;
   const msg = ch.run(G, C.event.ctx);
   G.trust = clamp(G.trust, 0, 100);
@@ -1185,10 +1187,10 @@ function previewDeficit(budget) {
 }
 
 const BUDGET_PRESETS = {
-  populist:  { icon: '🎁', name: 'Populist', desc: 'More welfare & farm support, lower taxes. Popular now — deficit rises.', d: { welfare: .4, agri: .2, itr: -1, gst: -1 } },
-  balanced:  { icon: '⚖️', name: 'Balanced', desc: 'Steady as she goes. No surprises.', d: {} },
-  growth:    { icon: '🏗️', name: 'Growth', desc: 'Build roads, schools; cut corporate tax. Business cheers, pays off later.', d: { infra: .4, education: .15, health: .1, ctr: -2 } },
-  austerity: { icon: '✂️', name: 'Austerity', desc: 'Cut spending, raise GST. Deficit falls, voters grumble.', d: { welfare: -.3, infra: -.2, agri: -.1, gst: 1 } },
+  populist:  { icon: '🎁', name: 'Give gifts', desc: 'Help people and lower taxes. People smile, but savings go down.', d: { welfare: .4, agri: .2, itr: -1, gst: -1 } },
+  balanced:  { icon: '⚖️', name: 'Keep it same', desc: 'No big changes.', d: {} },
+  growth:    { icon: '🏗️', name: 'Build roads', desc: 'Build roads and schools. Good for the future.', d: { infra: .4, education: .15, health: .1, ctr: -2 } },
+  austerity: { icon: '✂️', name: 'Save money', desc: 'Spend less and save. People grumble.', d: { welfare: -.3, infra: -.2, agri: -.1, gst: 1 } },
 };
 
 function budgetPreset(key) {
@@ -1218,7 +1220,7 @@ function dealHand() {
 
 function playCard(i) {
   const g = G.gov, c = g.hand[i];
-  if (g.played) return { err: 'You already played a card this quarter' };
+  if (g.played) return { err: 'You already picked one' };
   const res = c.type === 'bill' ? introduceBill(c.id, 'vote') : pmAction(c.id);
   if (!res.err) { g.played = true; save(); }
   return res;
@@ -1235,7 +1237,7 @@ function isBudgetQuarter() { return G.calQ % 4 === 2 || G.gov.q === 0; }
 
 function applyBudget(budget) {
   const g = G.gov, e = G.eco, old = { ...e.b };
-  if (!isBudgetQuarter() || g.lastBudgetQ === g.q) return { err: 'The budget can only be presented once, in the budget session' };
+  if (!isBudgetQuarter() || g.lastBudgetQ === g.q) return { err: 'Money Day is done for this year' };
   Object.assign(e.b, budget);
   g.lastBudgetQ = g.q;
   // immediate political reaction to headline changes
@@ -1304,7 +1306,7 @@ function resolveGovEvent(i) {
   const ev = GOV_EVENTS.find(e => e.id === cur.id);
   const ch = ev.choices(G, cur.ctx)[i];
   if (!ch) return { err: 'No such choice' };
-  if (ch.pc && g.pc < ch.pc) return { err: 'Not enough political capital' };
+  if (ch.pc && g.pc < ch.pc) return { err: 'Not enough ⭐ energy' };
   if (ch.pc) g.pc -= ch.pc;
   const msg = ch.run(G, cur.ctx);
   G.trust = clamp(G.trust, 0, 100);
@@ -1330,10 +1332,10 @@ function billStatus(id) {
 // mode: 'vote' | 'floor' (spend PC to win over RS) | 'moneyroute' (controversially route as money bill)
 function introduceBill(id, mode = 'vote') {
   const g = G.gov, st = billStatus(id), r = st.r;
-  if (g.events.length) return { err: 'Handle the pending crisis first' };
+  if (g.events.length) return { err: 'Answer the news card first' };
   if (g.passed.includes(id)) return { err: 'Already law' };
   const extra = mode === 'floor' ? st.floorPC : 0;
-  if (g.pc < r.pc + extra) return { err: 'Not enough political capital' };
+  if (g.pc < r.pc + extra) return { err: 'Not enough ⭐ energy' };
   g.pc -= r.pc + extra;
   // allies who dislike it lose patience
   for (const a of st.objectors) a.sat = clamp(a.sat - 15, 0, 100);
@@ -1382,19 +1384,19 @@ function enact(r) {
 
 // --- PM actions ---
 const PM_ACTIONS = {
-  pr: { name: 'Address the Nation', icon: '📡', pc: 2, desc: 'Prime-time speech. Lifts all groups — less each time you use it.', once: 'prDone',
+  pr: { name: 'Speech on TV', icon: '📡', pc: 2, desc: 'Talk to the whole country. People feel good.', once: 'prDone',
     run() { const g = G.gov; g.prUses = (g.prUses || 0) + 1; modAll(4 / (1 + (g.prUses - 1) * .5)); return 'Your address to the nation strikes a chord. Approval up across the board.'; } },
-  rbi: { name: 'Lean on the RBI', icon: '🏦', pc: 1, desc: 'Push for a 0.5% rate cut. Boosts growth now, but damages RBI credibility (inflation later).', once: 'rbiDone',
+  rbi: { name: 'Cheaper loans', icon: '🏦', pc: 1, desc: 'Ask the bank to make loans cheaper. Prices may go up later.', once: 'rbiDone',
     run() { const e = G.eco; e.repo = Math.max(2.5, e.repo - .5); G.gov.rbiCred = Math.max(0, G.gov.rbiCred - 15); mod('business', 2); return 'Under pressure, the RBI cuts rates by 50 bps. Markets cheer; economists worry.'; } },
-  reshuffle: { name: 'Cabinet Reshuffle', icon: '🔄', pc: 2, desc: 'Fresh faces. Trust +3, all allies +8 satisfaction.', once: 'reshuffleDone',
+  reshuffle: { name: 'New team', icon: '🔄', pc: 2, desc: 'Pick new ministers. Your friends get happy.', once: 'reshuffleDone',
     run() { G.trust = clamp(G.trust + 3, 0, 100); allySat(8); return 'A sweeping cabinet reshuffle brings in fresh faces and gives allies more posts.'; } },
 };
 
 function pmAction(id) {
   const a = PM_ACTIONS[id], g = G.gov;
-  if (g.events.length) return { err: 'Handle the pending crisis first' };
-  if (g[a.once]) return { err: 'Already done this quarter' };
-  if (g.pc < a.pc) return { err: 'Not enough political capital' };
+  if (g.events.length) return { err: 'Answer the news card first' };
+  if (g[a.once]) return { err: 'Already done. Try later!' };
+  if (g.pc < a.pc) return { err: 'Not enough ⭐ energy' };
   g.pc -= a.pc; g[a.once] = true;
   const msg = a.run(); log(msg); save();
   return { msg };
@@ -1402,8 +1404,8 @@ function pmAction(id) {
 
 function allyPackage(key) {
   const g = G.gov, a = g.allies.find(x => x.key === key);
-  if (g.events.length) return { err: 'Handle the pending crisis first' };
-  if (g.pc < 1) return { err: 'Not enough political capital' };
+  if (g.events.length) return { err: 'Answer the news card first' };
+  if (g.pc < 1) return { err: 'Not enough ⭐ energy' };
   g.pc -= 1; oneTime(.12); a.sat = clamp(a.sat + 22, 0, 100); a.warned = false;
   log(`Special development package for ${stateById(key) ? stateById(key).name : a.short}. ${a.short} is pleased.`);
   computeBudget(); save();
@@ -1413,8 +1415,8 @@ function allyPackage(key) {
 // --- quarter simulation ---
 function endQuarter() {
   const g = G.gov, e = G.eco;
-  if (g.events.length) return { err: 'Handle the pending crisis first' };
-  if (isBudgetQuarter() && g.lastBudgetQ !== g.q) return { err: 'Present the Budget first (Budget tab)' };
+  if (g.events.length) return { err: 'Answer the news card first' };
+  if (isBudgetQuarter() && g.lastBudgetQ !== g.q) return { err: 'Pick the Money Day plan first' };
   const prev = { growth: e.growth, infl: e.infl, unemp: e.unemp, sensex: e.sensex, deficit: e.deficit, approval: overallApproval() };
 
   // shocks
@@ -1597,12 +1599,12 @@ function legacyScore() {
   const yrs = G.quartersAsPM / 4;
   const g = avg(G.hist.growth);
   const score = Math.round(yrs * 120 + Math.max(0, g) * 40 * Math.min(yrs, 10) / 5 + G.promisesKept * 40 - G.promisesBroken * 25 + (G.gov ? G.gov.passed.length * 15 : 0));
-  let title = 'Footnote in History';
-  if (yrs === 0) title = 'Leader of the Opposition';
-  else if (score > 2600) title = 'Architect of Modern India';
-  else if (score > 1800) title = 'Visionary Statesman';
-  else if (score > 1100) title = 'Respected Prime Minister';
-  else if (score > 500) title = 'One-Term Wonder';
+  let title = 'New Leader 🌱';
+  if (yrs === 0) title = 'Brave Fighter 💪';
+  else if (score > 2600) title = 'Legend of India 🏆';
+  else if (score > 1800) title = 'Super PM 🌟';
+  else if (score > 1100) title = 'Great PM 👏';
+  else if (score > 500) title = 'Good PM 🙂';
   return { score: Math.max(0, score), title, yrs };
 }
 
@@ -1647,7 +1649,9 @@ function fans(blocs) {
   return `<div class="fans">${up.length ? `<span class="like">👍 ${up.join('')}</span>` : ''}${down.length ? `<span class="dislike">👎 ${down.join('')}</span>` : ''}</div>`;
 }
 
-function tug(you, A, label = 'Need 272 to win') {
+const word = (good, ok) => good ? '😀 Yes' : ok ? '😐 OK' : '😟 No';
+
+function tug(you, A, label = 'Get 272 to win 👑') {
   const w = x => (x / TOTAL_SEATS * 100).toFixed(1) + '%';
   return `<div class="tug">
     <div class="tugtop"><span class="who"><i class="av" style="background:${G.color}">${G.symbol}</i><b>${you}</b></span><span class="need">${label}</span><span class="who right"><b>${A}</b><i class="av" style="background:${RIVALS.A.color}">🔥</i></span></div>
@@ -1715,11 +1719,11 @@ function dealCampaign() {
 function moveCard(c, i) {
   const s = c.s ? stateById(c.s) : null;
   let icon, title, sub, badge;
-  if (c.k === 'rally') { icon = '📣'; title = `Rally in ${s.name}`; sub = `${s.seats} seats`; badge = '₹15'; }
-  if (c.k === 'alliance') { icon = '🤝'; title = `Team up with ${s.reg.short}`; sub = `${s.name} · ${s.seats} seats`; badge = Math.round(allianceChance(s.id) * 100) + '%'; }
-  if (c.k === 'ads') { icon = '📺'; title = 'TV Ads everywhere'; sub = 'Boost in every state'; badge = '₹40'; }
-  if (c.k === 'attack') { icon = '⚔️'; title = 'Attack the RSP'; sub = 'Risky!'; badge = '₹10'; }
-  if (c.k === 'fundraise') { icon = '💰'; title = 'Raise money'; sub = 'Get ₹50+'; badge = 'FREE'; }
+  if (c.k === 'rally') { icon = '📣'; title = `Big rally in ${s.name}`; sub = `Win hearts · ${s.seats} seats`; badge = '💰15'; }
+  if (c.k === 'alliance') { const ch = allianceChance(s.id); icon = '🤝'; title = `Make friends in ${s.name}`; sub = `Their local party joins you`; badge = ch >= .5 ? 'Easy 😀' : ch >= .25 ? 'Maybe 🤞' : 'Hard 😬'; }
+  if (c.k === 'ads') { icon = '📺'; title = 'Ads on TV'; sub = 'Everyone sees you'; badge = '💰40'; }
+  if (c.k === 'attack') { icon = '⚔️'; title = 'Show RSP mistakes'; sub = 'Can go wrong!'; badge = '💰10'; }
+  if (c.k === 'fundraise') { icon = '💰'; title = 'Collect money'; sub = 'Get 💰50 more'; badge = 'FREE'; }
   const blocked = actionBlocked(c.k, c.s);
   return `<button class="mcard" data-a="move" data-i="${i}" ${blocked ? 'disabled' : ''} style="animation-delay:${i * 60}ms">
     <span class="mi">${icon}</span><span class="mt"><b>${title}</b><small>${sub}</small></span><span class="badge">${badge}</span></button>`;
@@ -1732,11 +1736,11 @@ function renderCampaign() {
   if (!UI.deal) dealCampaign();
   const ev = C.event && CAMPAIGN_EVENTS.find(e => e.id === C.event.id);
   return `<div class="screen">
-    ${topbar([`📅 Week ${C.week}/${C.weeks}`, `💰 ₹${Math.round(C.funds)}`])}
+    ${topbar([`📅 Week ${C.week}/${C.weeks}`, `💰 ${Math.round(C.funds)}`])}
     ${tug(last.youBloc, last.aBloc)}
     ${ev ? eventCard(ev, C.event.ctx, 'cev') : `
     <div class="stage">
-      <p class="prompt">Choose your move <span class="dots">${'●'.repeat(C.ap)}${'○'.repeat(C.apMax - C.ap)}</span></p>
+      <p class="prompt">Pick one! <span class="dots">${'●'.repeat(C.ap)}${'○'.repeat(C.apMax - C.ap)}</span></p>
       <div class="mcards">${UI.deal.map(moveCard).join('')}</div>
     </div>`}
   </div>`;
@@ -1768,7 +1772,7 @@ function eventCard(ev, ctx, kind) {
     <div class="bigcard news">
       <div class="emo">${ev.icon}</div><h2>${ev.title}</h2><p>${esc(ev.text(G, ctx))}</p>
     </div>
-    <div class="answers">${choices.map((c, i) => `<button class="gbtn ${['blue', 'orange', 'red'][i]}" data-a="${kind}" data-i="${i}">${c.label}${c.cost ? ` <small>₹${c.cost}</small>` : ''}${c.pc ? ` <small>${c.pc}⭐</small>` : ''}</button>`).join('')}</div>
+    <div class="answers">${choices.map((c, i) => `<button class="gbtn ${['blue', 'orange', 'red'][i]}" data-a="${kind}" data-i="${i}" ${(c.pc && G.gov && c.pc > G.gov.pc) || (c.cost && G.camp && kind === 'cev' && c.cost > G.camp.funds) ? 'disabled' : ''}>${c.label}${c.cost ? ` <small>₹${c.cost}</small>` : ''}${c.pc ? ` <small>${c.pc}⭐</small>` : ''}</button>`).join('')}</div>
   </div>`;
 }
 
@@ -1797,7 +1801,7 @@ function renderResults() {
   if (done) {
     if (r.youBloc >= MAJORITY) verdict = '<div class="verdict win">🎉 YOU WIN! 🎉</div>';
     else if (r.aBloc >= MAJORITY) verdict = '<div class="verdict lose">😢 YOU LOST</div>';
-    else verdict = '<div class="verdict">⚖️ NO WINNER YET</div>';
+    else verdict = '<div class="verdict">🤔 Nobody got 272! Find friends!</div>';
   }
   return `<div class="screen">
     ${topbar(['🗳️ Counting votes'])}
@@ -1815,24 +1819,24 @@ function renderCoalition() {
   const c = G.coal, t = coalTotals();
   const k = c.kingmakers.find(x => !x.side && !x.tried);
   return `<div class="screen">
-    ${topbar([`🤝 Deal time · Round ${Math.min(c.round, c.rounds)}/${c.rounds}`])}
+    ${topbar([`🤝 Find friends · Try ${Math.min(c.round, c.rounds)}/${c.rounds}`])}
     ${tug(t.you, t.A)}
     ${k ? `<div class="stage">
-      <div class="bigcard"><div class="emo">🤝</div><h2>${esc(k.short)}</h2><p>${esc(k.name)} has <b>${k.seats} seats</b>. Will they join you?</p></div>
+      <div class="bigcard"><div class="emo">🤝</div><h2>${esc(k.short)}</h2><p>This party has <b>${k.seats} seats</b>. Will they be your friend?</p></div>
       <div class="answers">
         <button class="gbtn blue" data-a="offer" data-k="${k.key}" data-o="ask">🙏 Just ask</button>
         <button class="gbtn orange" data-a="offer" data-k="${k.key}" data-o="berth" ${c.berths ? '' : 'disabled'}>🏛️ Make them minister</button>
-        <button class="gbtn green" data-a="offer" data-k="${k.key}" data-o="package">🎁 Money for their state</button>
+        <button class="gbtn green" data-a="offer" data-k="${k.key}" data-o="package">🎁 Give money to their state</button>
       </div></div>`
     : `<div class="stage"><p class="prompt">Waiting for the others…</p></div><div class="bottom"><button class="gbtn green big" data-a="coalround">NEXT ▶</button></div>`}
   </div>`;
 }
 
 // ---------------- governance ----------------
-function meter(icon, good) {
+function meter(icon, good, label) {
   const g = clamp(good, 0, 1);
   const col = g >= .6 ? '#4ade80' : g >= .35 ? '#facc15' : '#f87171';
-  return `<div class="meter"><div class="mfill"><i style="height:${Math.max(6, g * 100)}%;background:${col}"></i><span>${icon}</span></div></div>`;
+  return `<div class="meter"><div class="mfill"><i style="height:${Math.max(6, g * 100)}%;background:${col}"></i><span>${icon}</span></div><small>${label}</small></div>`;
 }
 
 function renderGov() {
@@ -1846,12 +1850,12 @@ function renderGov() {
   else if (!g.played && UI.card < g.hand.length) stage = ideaStage(g.hand[UI.card]);
   else stage = `<div class="stage"><div class="bigcard"><div class="emo">⏳</div><h2>Time passes…</h2></div></div><div class="bottom"><button class="gbtn green big" data-a="endq">NEXT ▶</button></div>`;
   return `<div class="screen">
-    ${topbar([`📅 Year ${Math.floor(g.q / 4) + 1}/5`, `⭐ ${g.pc}`])}
+    ${topbar([`📅 Year ${Math.floor(g.q / 4) + 1}/5`, `⭐ ${g.pc} energy`])}
     <div class="meters" data-a="stats">
-      ${meter('😀', (overallApproval() - 25) / 45)}
-      ${meter('💰', (e.growth - 2) / 7)}
-      ${meter('🛒', 1 - (e.infl - 3.5) / 6)}
-      ${meter('🏦', 1 - (e.deficit - 3.5) / 4.5)}
+      ${meter('😀', (overallApproval() - 25) / 45, 'Happy')}
+      ${meter('🏭', (e.growth - 2) / 7, 'Jobs')}
+      ${meter('🛒', 1 - (e.infl - 3.5) / 6, 'Prices')}
+      ${meter('🐷', 1 - (e.deficit - 3.5) / 4.5, 'Savings')}
     </div>
     ${stage}
   </div>`;
@@ -1860,9 +1864,9 @@ function renderGov() {
 function budgetStage() {
   const icons = { populist: 'green', balanced: 'blue', growth: 'orange', austerity: 'red' };
   return `<div class="stage">
-    <div class="bigcard"><div class="emo">📒</div><h2>Budget Day!</h2><p>How will you spend India's money this year?</p></div>
+    <div class="bigcard"><div class="emo">📒</div><h2>Money Day!</h2><p>How will you use India's money this year?</p></div>
     <div class="grid2">${Object.entries(BUDGET_PRESETS).map(([k, p]) => `<button class="gbtn ${icons[k]}" data-a="preset" data-k="${k}">${p.icon} ${p.name}</button>`).join('')}</div>
-    <p class="tiny">🎁 happy people, more debt · ✂️ less debt, angry people · 🏗️ growth later</p>
+    <p class="tiny">Gifts make people happy now. Saving keeps India safe later.</p>
   </div>`;
 }
 
@@ -1886,7 +1890,7 @@ function ideaStage(c) {
     </div>
     <div class="yesno">
       <button class="round red" data-a="skipcard" aria-label="No">✖</button>
-      <span class="tiny">${can ? 'swipe or tap' : 'Not enough ⭐'}</span>
+      <span class="tiny">${can ? 'NO ← swipe → YES' : 'Need more ⭐ energy'}</span>
       <button class="round green" data-a="playcard" ${can ? '' : 'disabled'} aria-label="Yes">✔</button>
     </div>
   </div>`;
@@ -1898,7 +1902,7 @@ function renderReport() {
   return `<div class="screen title">
     <div class="logo-art">📋</div><h2 class="white">5 years done!</h2>
     <div class="bigcard">
-      <p>😀 Popularity <b>${r.approval}%</b></p><p>💰 Growth <b>${r.growth}%</b></p>
+      <p>😀 People happy: <b>${r.approval}%</b></p>
       <p>✅ Promises kept <b>${r.kept.length}</b> · ❌ broken <b>${r.broken.length}</b></p>
     </div>
     <div class="spacer"></div>
@@ -1982,7 +1986,7 @@ function finishQuarter() {
   UI.card = 0;
   if (G.phase === 'gov') {
     const d = Math.round(overallApproval() - before);
-    toast(`${d >= 0 ? '😀' : '😟'} People ${d >= 0 ? '+' : ''}${d}%`, d >= 0 ? 'good' : 'bad');
+    toast(d >= 0 ? '😀 People are happier!' : '😟 People are less happy', d >= 0 ? 'good' : 'bad');
   }
   render();
 }
@@ -2011,15 +2015,24 @@ const ACTIONS = {
   move(d) {
     const c = UI.deal[+d.i];
     const before = G.camp.polls[G.camp.polls.length - 1].youBloc;
+    const trust0 = G.trust;
     const r = campaignAction(c.k, c.s, false);
     if (r.err) return handle(r);
-    toast(r.msg, 'good'); buzz(15);
+    const s = c.s && stateById(c.s);
+    const say = {
+      rally: `📣 Big crowd in ${s && s.name}!`,
+      alliance: s && G.camp.alliances[c.s] === 'you' ? `🤝 New friend in ${s.name}! 🎉` : '😕 They said no. Try later.',
+      ads: '📺 Everyone saw your ad!',
+      fundraise: '💰 You got more money!',
+      attack: G.trust < trust0 ? '😬 Oops! That went wrong.' : '⚔️ It worked! RSP looks bad.',
+    }[c.k];
+    toast(say, say.startsWith('😕') || say.startsWith('😬') ? 'bad' : 'good'); buzz(15);
     UI.deal = null;
     if (G.camp.ap === 0) {
       const w = endWeek();
       if (!w.election) {
         const now = G.camp.polls[G.camp.polls.length - 1].youBloc;
-        toast(`📊 New poll: ${now - before >= 0 ? '+' : ''}${now - before} seats`, now >= before ? 'good' : 'bad');
+        toast(now >= before ? `📈 You went up ${now - before} seats!` : `📉 You went down ${before - now} seats`, now >= before ? 'good' : 'bad');
       } else UI.reveal = null;
     }
     render();
@@ -2030,7 +2043,13 @@ const ACTIONS = {
     UI.reveal = null; afterResults(); save(); UI.card = 0; render();
     if (G.phase === 'gov') welcomePM();
   },
-  offer(d) { handle(coalOffer(d.k, d.o)); save(); },
+  offer(d) {
+    const k = G.coal.kingmakers.find(x => x.key === d.k);
+    const r = coalOffer(d.k, d.o); save();
+    if (r.err) return handle(r);
+    toast(k.side === 'you' ? `🎉 ${k.short} joins you!` : `😕 ${k.short} said no.`, k.side === 'you' ? 'good' : 'bad'); buzz(15);
+    render();
+  },
   coalround() { coalEndRound(); save(); UI.card = 0; render(); if (G.phase === 'gov') welcomePM(); },
   gev(d) {
     const r = resolveGovEvent(+d.i);
@@ -2039,24 +2058,23 @@ const ACTIONS = {
     if (r.phaseChange) { UI.deal = null; UI.pdeal = null; UI.picked = []; }
     render();
   },
-  preset(d) { handle(budgetPreset(d.k)); },
+  preset(d) { const r = budgetPreset(d.k); if (r.err) return handle(r); toast(`${BUDGET_PRESETS[d.k].icon} Done!`, 'good'); render(); },
   playcard() {
     const r = playCard(UI.card);
     if (r.err) { toast(r.err, 'bad'); return render(); }
-    toast(r.msg, r.fail ? 'bad' : 'good');
     finishQuarter();
+    toast(r.fail ? '😞 Not enough votes. It did not pass.' : '🎉 Yes! It is done!', r.fail ? 'bad' : 'good');
   },
   skipcard() { UI.card++; if (UI.card >= G.gov.hand.length) finishQuarter(); else render(); },
   endq() { finishQuarter(); },
   stats() {
     const e = G.eco;
     openModal(`<h2>🇮🇳 India</h2>
-      <div class="srow"><span>😀 People happy</span><b>${Math.round(overallApproval())}%</b></div>
-      <div class="srow"><span>💰 Economy growth</span><b>${e.growth.toFixed(1)}%</b></div>
-      <div class="srow"><span>🛒 Prices rising</span><b>${e.infl.toFixed(1)}%</b></div>
-      <div class="srow"><span>🏦 Govt. debt (deficit)</span><b>${e.deficit.toFixed(1)}%</b></div>
-      <div class="srow"><span>👷 Jobless</span><b>${e.unemp.toFixed(1)}%</b></div>
-      <div class="faces">${BLOCS.map(b => `<span>${b.icon}<br>${Math.round(G.gov.approval[b.id])}%</span>`).join('')}</div>
+      <div class="srow"><span>😀 Are people happy?</span><b>${word(overallApproval() >= 50, overallApproval() >= 40)}</b></div>
+      <div class="srow"><span>🏭 Are there jobs?</span><b>${word(e.growth >= 6, e.growth >= 4)}</b></div>
+      <div class="srow"><span>🛒 Are prices OK?</span><b>${word(e.infl <= 4.5, e.infl <= 6.5)}</b></div>
+      <div class="srow"><span>🐷 Is India saving money?</span><b>${word(e.deficit <= 4.5, e.deficit <= 6.5)}</b></div>
+      <h3>Who is happy?</h3>${BLOCS.map(b => { const v = G.gov.approval[b.id]; return `<div class="srow"><span>${b.icon} ${b.name}</span><b>${v >= 55 ? '😀' : v >= 42 ? '😐' : '😠'}</b></div>`; }).join('')}
       ${G.gov.promises.length ? `<h3>Promises</h3>${G.gov.promises.map(id => `<div class="srow"><span>${PROMISES.find(x => x.id === id).check(G) ? '✅' : '⏳'} ${PROMISES.find(x => x.id === id).name}</span></div>`).join('')}` : ''}
       <button class="gbtn green" data-a="closemodal">OK</button>`);
   },
@@ -2065,7 +2083,7 @@ const ACTIONS = {
     openModal(`<h2>🤝 Friends</h2>${g.allies.map(a => `<div class="srow"><span>${a.sat >= 50 ? '😀' : a.sat >= 30 ? '😐' : '😠'} ${esc(a.short)} · ${a.seats} seats</span><button class="gbtn small orange" data-a="pkggo" data-k="${a.key}" ${g.pc < 1 ? 'disabled' : ''}>🎁 1⭐</button></div>`).join('') || '<p>No allies.</p>'}
       <button class="gbtn green" data-a="closemodal">OK</button>`);
   },
-  pkggo(d) { handle(allyPackage(d.k)); },
+  pkggo(d) { const r = allyPackage(d.k); if (r.err) return handle(r); toast('🎁 Your friend is happy!', 'good'); render(); },
   reelect() { goToElection(false); UI.deal = null; UI.pdeal = null; UI.picked = []; render(); },
   menu() {
     openModal(`<h2>Menu</h2><div class="answers">
@@ -2080,7 +2098,7 @@ const ACTIONS = {
 function welcomePM() {
   openModal(`<div class="center"><div class="emo">🇮🇳</div><h2>You are Prime Minister!</h2>
     <p>Ideas will come to you.<br><b>Swipe right = YES</b> · <b>left = NO</b></p>
-    <p>Keep the 4 meters green!</p><button class="gbtn green" data-a="closemodal">LET'S GO ▶</button></div>`);
+    <p>Keep the 4 meters green! 🟩</p><p>Each idea needs ⭐ energy. Happy people give you more.</p><button class="gbtn green" data-a="closemodal">LET'S GO ▶</button></div>`);
 }
 
 document.addEventListener('click', e => {

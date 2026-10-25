@@ -191,8 +191,8 @@ function projection(n = 12) {
 
 function canAct(cost, ap = 1) {
   const C = G.camp;
-  if (C.ap < ap) return 'No action points left this week';
-  if (C.funds < cost) return 'Not enough funds';
+  if (C.ap < ap) return 'No moves left this week';
+  if (C.funds < cost) return 'Not enough 💰 money';
   return null;
 }
 
@@ -315,13 +315,13 @@ function actionBlocked(id, stateId, opt) {
   const a = CAMPAIGN_ACTIONS[id], C = G.camp;
   const e = canAct(a.cost + (id === 'alliance' && opt ? 25 : 0));
   if (e) return e;
-  if (C.event) return 'Respond to the current event first';
+  if (C.event) return 'Answer the news card first';
   if (id === 'press' && C.pressDone) return 'Already held one this week';
   if (id === 'alliance') {
     const s = stateById(stateId);
     if (!s.reg) return 'No regional party here';
     if (C.alliances[stateId] === 'you') return 'Already your ally';
-    if ((C.cooldown[stateId] || 0) > C.week) return 'They need time before talking again';
+    if ((C.cooldown[stateId] || 0) > C.week) return 'They want a break. Try later!';
   }
   return null;
 }
@@ -339,9 +339,9 @@ function choosePromises(ids) {
 
 function addPromise(id) {
   const C = G.camp;
-  if (C.event) return { err: 'Respond to the current event first' };
+  if (C.event) return { err: 'Answer the news card first' };
   if (C.promises.length >= 5) return { err: 'Manifesto full (5 promises max)' };
-  if (C.ap < 1) return { err: 'No action points left this week' };
+  if (C.ap < 1) return { err: 'No moves left this week' };
   if (C.promises.includes(id)) return { err: 'Already promised' };
   C.ap--; C.promises.push(id);
   const p = PROMISES.find(x => x.id === id);
@@ -386,7 +386,7 @@ function rivalTurn() {
 
 function endWeek() {
   const C = G.camp;
-  if (C.event) return { err: 'Respond to the current event first' };
+  if (C.event) return { err: 'Answer the news card first' };
   rivalTurn();
   C.momentum *= .82; C.momA *= .82; C.momB *= .85;
   const income = Math.round(8 + C.cadre * .15);
@@ -415,7 +415,7 @@ function resolveCampaignEvent(i) {
   const C = G.camp, ev = CAMPAIGN_EVENTS.find(e => e.id === C.event.id);
   const ch = ev.choices(G, C.event.ctx)[i];
   if (!ch) return { err: 'No such choice' };
-  if (ch.cost && C.funds < ch.cost) return { err: 'Not enough funds' };
+  if (ch.cost && C.funds < ch.cost) return { err: 'Not enough 💰 money' };
   if (ch.cost) C.funds -= ch.cost;
   const msg = ch.run(G, C.event.ctx);
   G.trust = clamp(G.trust, 0, 100);
@@ -587,10 +587,10 @@ function previewDeficit(budget) {
 }
 
 const BUDGET_PRESETS = {
-  populist:  { icon: '🎁', name: 'Populist', desc: 'More welfare & farm support, lower taxes. Popular now — deficit rises.', d: { welfare: .4, agri: .2, itr: -1, gst: -1 } },
-  balanced:  { icon: '⚖️', name: 'Balanced', desc: 'Steady as she goes. No surprises.', d: {} },
-  growth:    { icon: '🏗️', name: 'Growth', desc: 'Build roads, schools; cut corporate tax. Business cheers, pays off later.', d: { infra: .4, education: .15, health: .1, ctr: -2 } },
-  austerity: { icon: '✂️', name: 'Austerity', desc: 'Cut spending, raise GST. Deficit falls, voters grumble.', d: { welfare: -.3, infra: -.2, agri: -.1, gst: 1 } },
+  populist:  { icon: '🎁', name: 'Give gifts', desc: 'Help people and lower taxes. People smile, but savings go down.', d: { welfare: .4, agri: .2, itr: -1, gst: -1 } },
+  balanced:  { icon: '⚖️', name: 'Keep it same', desc: 'No big changes.', d: {} },
+  growth:    { icon: '🏗️', name: 'Build roads', desc: 'Build roads and schools. Good for the future.', d: { infra: .4, education: .15, health: .1, ctr: -2 } },
+  austerity: { icon: '✂️', name: 'Save money', desc: 'Spend less and save. People grumble.', d: { welfare: -.3, infra: -.2, agri: -.1, gst: 1 } },
 };
 
 function budgetPreset(key) {
@@ -620,7 +620,7 @@ function dealHand() {
 
 function playCard(i) {
   const g = G.gov, c = g.hand[i];
-  if (g.played) return { err: 'You already played a card this quarter' };
+  if (g.played) return { err: 'You already picked one' };
   const res = c.type === 'bill' ? introduceBill(c.id, 'vote') : pmAction(c.id);
   if (!res.err) { g.played = true; save(); }
   return res;
@@ -637,7 +637,7 @@ function isBudgetQuarter() { return G.calQ % 4 === 2 || G.gov.q === 0; }
 
 function applyBudget(budget) {
   const g = G.gov, e = G.eco, old = { ...e.b };
-  if (!isBudgetQuarter() || g.lastBudgetQ === g.q) return { err: 'The budget can only be presented once, in the budget session' };
+  if (!isBudgetQuarter() || g.lastBudgetQ === g.q) return { err: 'Money Day is done for this year' };
   Object.assign(e.b, budget);
   g.lastBudgetQ = g.q;
   // immediate political reaction to headline changes
@@ -706,7 +706,7 @@ function resolveGovEvent(i) {
   const ev = GOV_EVENTS.find(e => e.id === cur.id);
   const ch = ev.choices(G, cur.ctx)[i];
   if (!ch) return { err: 'No such choice' };
-  if (ch.pc && g.pc < ch.pc) return { err: 'Not enough political capital' };
+  if (ch.pc && g.pc < ch.pc) return { err: 'Not enough ⭐ energy' };
   if (ch.pc) g.pc -= ch.pc;
   const msg = ch.run(G, cur.ctx);
   G.trust = clamp(G.trust, 0, 100);
@@ -732,10 +732,10 @@ function billStatus(id) {
 // mode: 'vote' | 'floor' (spend PC to win over RS) | 'moneyroute' (controversially route as money bill)
 function introduceBill(id, mode = 'vote') {
   const g = G.gov, st = billStatus(id), r = st.r;
-  if (g.events.length) return { err: 'Handle the pending crisis first' };
+  if (g.events.length) return { err: 'Answer the news card first' };
   if (g.passed.includes(id)) return { err: 'Already law' };
   const extra = mode === 'floor' ? st.floorPC : 0;
-  if (g.pc < r.pc + extra) return { err: 'Not enough political capital' };
+  if (g.pc < r.pc + extra) return { err: 'Not enough ⭐ energy' };
   g.pc -= r.pc + extra;
   // allies who dislike it lose patience
   for (const a of st.objectors) a.sat = clamp(a.sat - 15, 0, 100);
@@ -784,19 +784,19 @@ function enact(r) {
 
 // --- PM actions ---
 const PM_ACTIONS = {
-  pr: { name: 'Address the Nation', icon: '📡', pc: 2, desc: 'Prime-time speech. Lifts all groups — less each time you use it.', once: 'prDone',
+  pr: { name: 'Speech on TV', icon: '📡', pc: 2, desc: 'Talk to the whole country. People feel good.', once: 'prDone',
     run() { const g = G.gov; g.prUses = (g.prUses || 0) + 1; modAll(4 / (1 + (g.prUses - 1) * .5)); return 'Your address to the nation strikes a chord. Approval up across the board.'; } },
-  rbi: { name: 'Lean on the RBI', icon: '🏦', pc: 1, desc: 'Push for a 0.5% rate cut. Boosts growth now, but damages RBI credibility (inflation later).', once: 'rbiDone',
+  rbi: { name: 'Cheaper loans', icon: '🏦', pc: 1, desc: 'Ask the bank to make loans cheaper. Prices may go up later.', once: 'rbiDone',
     run() { const e = G.eco; e.repo = Math.max(2.5, e.repo - .5); G.gov.rbiCred = Math.max(0, G.gov.rbiCred - 15); mod('business', 2); return 'Under pressure, the RBI cuts rates by 50 bps. Markets cheer; economists worry.'; } },
-  reshuffle: { name: 'Cabinet Reshuffle', icon: '🔄', pc: 2, desc: 'Fresh faces. Trust +3, all allies +8 satisfaction.', once: 'reshuffleDone',
+  reshuffle: { name: 'New team', icon: '🔄', pc: 2, desc: 'Pick new ministers. Your friends get happy.', once: 'reshuffleDone',
     run() { G.trust = clamp(G.trust + 3, 0, 100); allySat(8); return 'A sweeping cabinet reshuffle brings in fresh faces and gives allies more posts.'; } },
 };
 
 function pmAction(id) {
   const a = PM_ACTIONS[id], g = G.gov;
-  if (g.events.length) return { err: 'Handle the pending crisis first' };
-  if (g[a.once]) return { err: 'Already done this quarter' };
-  if (g.pc < a.pc) return { err: 'Not enough political capital' };
+  if (g.events.length) return { err: 'Answer the news card first' };
+  if (g[a.once]) return { err: 'Already done. Try later!' };
+  if (g.pc < a.pc) return { err: 'Not enough ⭐ energy' };
   g.pc -= a.pc; g[a.once] = true;
   const msg = a.run(); log(msg); save();
   return { msg };
@@ -804,8 +804,8 @@ function pmAction(id) {
 
 function allyPackage(key) {
   const g = G.gov, a = g.allies.find(x => x.key === key);
-  if (g.events.length) return { err: 'Handle the pending crisis first' };
-  if (g.pc < 1) return { err: 'Not enough political capital' };
+  if (g.events.length) return { err: 'Answer the news card first' };
+  if (g.pc < 1) return { err: 'Not enough ⭐ energy' };
   g.pc -= 1; oneTime(.12); a.sat = clamp(a.sat + 22, 0, 100); a.warned = false;
   log(`Special development package for ${stateById(key) ? stateById(key).name : a.short}. ${a.short} is pleased.`);
   computeBudget(); save();
@@ -815,8 +815,8 @@ function allyPackage(key) {
 // --- quarter simulation ---
 function endQuarter() {
   const g = G.gov, e = G.eco;
-  if (g.events.length) return { err: 'Handle the pending crisis first' };
-  if (isBudgetQuarter() && g.lastBudgetQ !== g.q) return { err: 'Present the Budget first (Budget tab)' };
+  if (g.events.length) return { err: 'Answer the news card first' };
+  if (isBudgetQuarter() && g.lastBudgetQ !== g.q) return { err: 'Pick the Money Day plan first' };
   const prev = { growth: e.growth, infl: e.infl, unemp: e.unemp, sensex: e.sensex, deficit: e.deficit, approval: overallApproval() };
 
   // shocks
@@ -999,12 +999,12 @@ function legacyScore() {
   const yrs = G.quartersAsPM / 4;
   const g = avg(G.hist.growth);
   const score = Math.round(yrs * 120 + Math.max(0, g) * 40 * Math.min(yrs, 10) / 5 + G.promisesKept * 40 - G.promisesBroken * 25 + (G.gov ? G.gov.passed.length * 15 : 0));
-  let title = 'Footnote in History';
-  if (yrs === 0) title = 'Leader of the Opposition';
-  else if (score > 2600) title = 'Architect of Modern India';
-  else if (score > 1800) title = 'Visionary Statesman';
-  else if (score > 1100) title = 'Respected Prime Minister';
-  else if (score > 500) title = 'One-Term Wonder';
+  let title = 'New Leader 🌱';
+  if (yrs === 0) title = 'Brave Fighter 💪';
+  else if (score > 2600) title = 'Legend of India 🏆';
+  else if (score > 1800) title = 'Super PM 🌟';
+  else if (score > 1100) title = 'Great PM 👏';
+  else if (score > 500) title = 'Good PM 🙂';
   return { score: Math.max(0, score), title, yrs };
 }
 

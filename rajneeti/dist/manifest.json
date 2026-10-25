@@ -1,0 +1,11 @@
+{
+  "name": "Rajneeti: Path to Power",
+  "short_name": "Rajneeti",
+  "description": "Offline Indian political strategy game",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b1020",
+  "theme_color": "#0e1424",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

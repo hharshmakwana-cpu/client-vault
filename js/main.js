@@ -11,7 +11,19 @@ addEventListener('unhandledrejection', e => { console.error(e.reason); toast(err
 if (!window.isSecureContext || !crypto.subtle) {
   app.innerHTML = `<main class="lock"><h1>Needs a secure connection</h1><p class="sub">Open this app from its https:// address.</p></main>`;
 } else {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) {
+    // A new version, once installed, takes over at once. Code already running stays old until a
+    // reload, so: reload straight away if the vault is locked (nothing to lose), else offer it.
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return; // first install, not an update
+      if (!S) return location.reload();
+      toast('A new version of the app is ready', { label: 'Reload', fn: () => { keepDraft(); setTimeout(() => location.reload(), 300); } });
+    });
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+    }, () => {});
+  }
   navigator.storage?.persist?.();
   bioAvailable().then(ok_ => { BIO_OK = ok_; if (S && cur.v === 'list') renderList(); });
   const qs = new URLSearchParams(location.search);

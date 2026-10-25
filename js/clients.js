@@ -26,6 +26,7 @@ function renderList() {
     ? `You’re offline. ${plural(OUT.size, 'change')} saved on this device will upload when you’re back online.`
     : 'You’re offline. Changes you make are saved on this device and upload when you’re back online.'} Tap to retry.</button>`;
   else if (OUT.size) banner = `<button class="banner" data-act="sync">${plural(OUT.size, 'change')} not uploaded yet. Tap to retry.</button>`;
+  if (S.unreadable) banner = `<div class="banner"><span class="grow">${plural(S.unreadable, 'client record')} couldn’t be opened with this vault’s key — ${S.unreadable === 1 ? 'it may be' : 'they may be'} damaged. ${S.unreadable === 1 ? 'It’s' : 'They’re'} left as ${S.unreadable === 1 ? 'it is' : 'they are'}; restoring a backup can bring ${S.unreadable === 1 ? 'it' : 'them'} back.</span></div>` + banner;
   if (!banner && BIO_OK && !bioRecord() && settings.bioOffer) banner = bioPending
     ? `<div class="banner info"><span class="grow">Almost done — confirm ${esc(BIO)} once more.</span><button class="bbtn" data-act="bioOn">Confirm</button></div>`
     : `<div class="banner info"><span class="grow">Unlock faster with ${esc(BIO)}.</span><button class="bbtn" data-act="bioOn">Turn on</button><button class="bx" data-act="bioNo" aria-label="Dismiss">×</button></div>`;
@@ -48,6 +49,7 @@ function renderList() {
   ACT.add = () => go('edit', null);
   ACT.open = t => go('detail', t.dataset.id);
   ACT.filter = t => { F = t.dataset.f; drawList(); };
+  ACT.clearq = () => { Q = ''; F = 'All'; $('#q').value = ''; drawList(); $('#q').focus(); };
   ACT.sync = () => sync();
   ACT.bioOn = () => bioTurnOn(() => renderList());
   ACT.firmd = () => go('firm', { from: 'list' });
@@ -73,7 +75,11 @@ function drawList() {
       <button class="linkbtn small" data-act="sample">Download a sample Excel file</button></div></div>`;
     return;
   }
-  if (!shown.length) { el.innerHTML = `<div class="empty"><b>No matches</b>${q ? `Nothing found for “${esc(Q)}”.` : 'No clients with this status.'}</div>`; return; }
+  if (!shown.length) {
+    el.innerHTML = `<div class="empty"><b>No matches</b>${q ? `Nothing found for “${esc(Q.trim())}”${F !== 'All' ? ` among ${esc(F)} clients` : ''}.` : 'No clients with this status.'}
+      <div class="stack empty-actions"><button class="btn plainbtn" data-act="clearq">${q ? 'Clear search' : 'Show all clients'}</button></div></div>`;
+    return;
+  }
   const groups = new Map();
   for (const c of shown) { const L = /[A-Z]/i.test(c.name?.[0]) ? c.name[0].toUpperCase() : '#'; (groups.get(L) || groups.set(L, []).get(L)).push(c); }
   let html = '';
@@ -204,7 +210,7 @@ function renderDetail(id) {
 }
 
 // ---------- edit ----------
-const msgDiv = '<div class="fmsg" hidden></div>';
+const msgDiv = '<div class="fmsg" hidden aria-live="polite"></div>';
 const inputAttrs = 'autocomplete="off" autocorrect="off" spellcheck="false"';
 const eyeBtn = label => `<button type="button" class="ibtn" data-act="mask" aria-label="Show or hide ${esc(label)}">${I.eye}</button>`;
 const xrow = (x = {}) => `<div class="xrow" data-secret="${x.secret ? 1 : 0}">
@@ -321,6 +327,9 @@ function renderEdit(a) {
     if (!m) return;
     m.hidden = !res; m.textContent = res?.msg || ''; m.className = 'fmsg ' + (res?.level || '');
     row.classList.toggle('bad', res?.level === 'err');
+    // Screen readers read the message with the field it belongs to.
+    m.id ||= 'msg-' + uid();
+    res ? el.setAttribute('aria-describedby', m.id) : el.removeAttribute('aria-describedby');
     el.setAttribute('aria-invalid', res?.level === 'err' ? 'true' : 'false');
   };
   const check = (el, x) => {
@@ -421,8 +430,12 @@ function renderEdit(a) {
     g.remove(); dirty = true; relabel(); validateAll();
   };
   ACT.del = async () => {
-    if (!confirm(`Delete ${orig.name}? This can’t be undone.`)) return;
-    try { await deleteClient(id); toast('Client deleted'); go('list'); } catch (e) { toast(errText(e)); }
+    if (!confirm(`Delete ${orig.name}? You can restore them from Settings → Recently deleted for ${TRASH_DAYS} days.`)) return;
+    try {
+      await updateClient(orig, d => { d.deleted = Date.now(); });
+      go('list');
+      toast(savedMsg(`${orig.name} deleted`), { label: 'Undo', fn: () => restoreClient(id) });
+    } catch (e) { toast(errText(e)); }
   };
   // Everything on the form, as a client record (not yet checked).
   const collect = () => {
@@ -491,8 +504,8 @@ function renderEdit(a) {
     try {
       await saveClient(d);
       // A new client goes straight to choosing returns, with the usual ones already ticked.
-      if (!orig && suggestComp(d).size) { toast('Client added'); go('comp', { id: d.id, fresh: true }); }
-      else { toast('Saved'); go('detail', d.id); }
+      if (!orig && suggestComp(d).size) { toast(savedMsg('Client added')); go('comp', { id: d.id, fresh: true }); }
+      else { toast(savedMsg('Saved')); go('detail', d.id); }
     }
     catch (e) { t.disabled = false; t.textContent = orig ? 'Done' : 'Save'; if (e instanceof AuthError) return signOut(e.message); toast(errText(e)); }
   };

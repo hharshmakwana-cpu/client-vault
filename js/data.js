@@ -100,8 +100,8 @@ const RULES = {
   mobile: v => /^[6-9]\d{9}$/.test(normMobile(v)) ? null : err('Enter a 10-digit Indian mobile number (starts with 6–9)'),
   email: v => /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/.test(v) ? null : err('Enter a valid email address'),
   dob: (v, c) => {
+    if (!validYmd(v)) return err('Enter a real date (this one doesn’t exist on the calendar)');
     const d = new Date(v + 'T00:00:00');
-    if (isNaN(d)) return err('Enter a valid date');
     if (d > new Date()) return err('This date is in the future');
     if (d.getFullYear() < 1850) return err('Check the year');
     if (c.type === 'Individual' && (Date.now() - d) / 31557600000 > 110) return warn('That makes the person over 110 — check the year');

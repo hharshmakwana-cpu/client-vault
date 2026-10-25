@@ -29,15 +29,21 @@ const CSV_COLS = {
   business: ['business name', 'trade name'], notes: ['notes', 'remarks'],
 };
 const TYPE_WORDS = [[/propriet|individual|person/i, 'Individual'], [/huf/i, 'HUF'], [/llp/i, 'LLP'], [/partner|firm/i, 'Partnership Firm'], [/company|pvt|private|limited|ltd/i, 'Company'], [/trust/i, 'Trust'], [/boi|body of ind/i, 'BOI'], [/aop|association|society/i, 'AOP']];
+// Dates in a CSV: YYYY-MM-DD, or DD/MM/YYYY (also DD-MM-YYYY, DD.MM.YYYY, 2-digit years).
+// Returns '' when empty, null when it isn't a real calendar date.
 function csvDate(v) {
+  v = (v || '').trim();
   if (!v) return '';
-  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v);
-  if (m) return ymd(+m[1], +m[2], +m[3]);
-  m = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/.exec(v);
-  if (!m) return null;
-  let y = +m[3]; if (y < 100) y += y > 30 ? 1900 : 2000;
-  const d = new Date(y, +m[2] - 1, +m[1]);
-  return d.getMonth() === +m[2] - 1 ? ymd(y, +m[2], +m[1]) : null;
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v), y, mo, d;
+  if (m) [y, mo, d] = [+m[1], +m[2], +m[3]];
+  else {
+    m = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})$/.exec(v);
+    if (!m) return null;
+    [d, mo, y] = [+m[1], +m[2], +m[3]];
+    if (m[3].length === 2) y += y > 30 ? 1900 : 2000;
+  }
+  const s = ymd(y, mo, d);
+  return validYmd(s) ? s : null;
 }
 function csvToClients(text) {
   const rows = parseCSV(text);
@@ -61,7 +67,7 @@ function csvToClients(text) {
     set('aadhaar', 'aadhaar'); set('mobile', 'mobile'); set('email', 'lower'); set('tan', 'id'); set('regNo', 'id');
     set('tracesUser', 'up'); set('bankAcc', 'digits'); set('ifsc', 'id');
     const dob = csvDate(get('dob'));
-    if (dob === null) errors.push(`Date “${get('dob')}” isn’t a valid date (use DD/MM/YYYY)`); else if (dob) c.dob = dob;
+    if (dob === null) errors.push(`Date of birth / incorporation “${get('dob')}” isn’t a real date (use DD/MM/YYYY)`); else if (dob) c.dob = dob;
     const gstins = get('gstin').split(/[;,\s]+/).map(NORM.id).filter(Boolean);
     c.gst = gstins.map((g, j) => ({ gstin: g, user: j ? '' : get('gstUser'), pass: j ? '' : get('gstPass') }));
     if (!gstins.length && (get('gstUser') || get('gstPass'))) c.gst = [{ gstin: '', user: get('gstUser'), pass: get('gstPass') }];

@@ -197,6 +197,8 @@ select.finput{color:var(--accent);background:none}
 #toast{position:fixed;left:50%;bottom:calc(28px + env(safe-area-inset-bottom));transform:translate(-50%,24px) scale(.96);background:rgba(28,28,30,.86);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);color:#fff;padding:11px 20px;border-radius:999px;font-size:15px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .25s,transform .45s var(--ease);z-index:50;max-width:calc(100% - 32px);text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.2)}
 @media (display-mode:standalone){#toast{bottom:calc(64px + env(safe-area-inset-bottom))}}
 #toast.show{opacity:1;transform:translate(-50%,0) scale(1)}
+#toast.has-act{pointer-events:auto;display:flex;align-items:center;gap:12px;padding-right:8px}
+.toast-act{color:#6bb3ff;font-weight:600;padding:6px 10px;min-height:36px;border-radius:999px}
 
 /* ---- practice: tiles, segmented control, due chips, ledger ---- */
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0 16px 16px}

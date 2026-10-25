@@ -20,21 +20,41 @@ function tidy(c) {
   if (c.type === 'AOP / BOI') c.type = c.pan?.[3] === 'B' ? 'BOI' : 'AOP';
   return c;
 }
+// Clients in use are in S.clients; deleted ones stay in S.trash for 30 days ("Recently deleted").
+// A record that can't be decrypted (damaged, or from another vault) is left untouched on the
+// server and counted in S.unreadable, so the list can say so instead of silently hiding it.
+const TRASH_DAYS = 30;
+function placeClient(c) {
+  S.clients = S.clients.filter(x => x.id !== c.id); S.trash = S.trash.filter(x => x.id !== c.id);
+  (c.deleted ? S.trash : S.clients).push(c);
+}
+function dropClient(id) { S.clients = S.clients.filter(x => x.id !== id); S.trash = S.trash.filter(x => x.id !== id); }
 async function applyRecs(recs) {
-  const prev = new Map(S.clients.map(c => [c.id, c]));
-  const clients = [], map = new Map();
+  const prev = new Map([...S.clients, ...S.trash].map(c => [c.id, c]));
+  const clients = [], trash = [], map = new Map();
+  let unreadable = 0;
   for (const r of recs) {
     map.set(r.id, r);
     const old = prev.get(r.id), oldRec = S.recs.get(r.id);
-    if (old && oldRec && oldRec.ct === r.ct) { clients.push(old); continue; }
-    try { const c = await decJSON(S.key, r); c.id = r.id; clients.push(tidy(c)); }
-    catch { console.warn('Could not decrypt record', r.id); }
+    let c = old && oldRec && oldRec.ct === r.ct ? old : null;
+    if (!c) {
+      try { c = await decJSON(S.key, r); if (!c || typeof c !== 'object') throw 0; c.id = r.id; c = tidy(c); }
+      catch { unreadable++; continue; }
+    }
+    (c.deleted ? trash : clients).push(c);
   }
-  S.clients = clients; S.recs = map;
+  S.clients = clients; S.trash = trash; S.recs = map; S.unreadable = unreadable;
 }
-const writeCache = () => store.set(cacheKey(), { vault: S.vault, clients: [...S.recs.values()] }).catch(() => {});
+// Keeps a copy on this device for offline use. If the device's storage is full, say so (once).
+let cacheWarned = false;
+const writeCache = () => store.set(cacheKey(), { vault: S.vault, clients: [...S.recs.values()] }).then(() => { cacheWarned = false; }, () => {
+  if (!cacheWarned) { cacheWarned = true; toast('This device’s storage is full — the offline copy couldn’t be updated. Free up some space.'); }
+});
 // The few actions that must reach the server straight away.
 function needOnline() { if (S.offline) { toast('You’re offline — this needs an internet connection.'); return false; } return true; }
+
+// What to say after a save: whether it reached the vault, or is kept on this device for now.
+const savedMsg = (msg = 'Saved') => OUT.size ? `${msg} on this device — it uploads when you’re back online` : msg;
 
 // ---------- merging changes from two devices ----------
 // Each save says which server version it was based on. If another device saved in between, the
@@ -75,7 +95,7 @@ function merge3(base, mine, theirs) {
 let OUT = new Map(), writeGen = 0, flushing = null;
 const outboxKey = () => 'outbox:' + DB.user.uid;
 async function loadOutbox() { OUT = new Map((await store.get(outboxKey()).catch(() => null)) || []); }
-const saveOutbox = () => store.set(outboxKey(), [...OUT]).catch(() => {});
+const saveOutbox = () => store.set(outboxKey(), [...OUT]).then(() => true, () => false);
 const sendOp = op => op.t === 'put' ? putClientMerged(op) : op.t === 'del' ? DB.delClient(op.id) : putVaultMerged(op);
 async function putClientMerged(op) {
   let rec = op.rec, pre = op.pre;
@@ -85,7 +105,7 @@ async function putClientMerged(op) {
       if (S) {
         const merged = rec !== op.rec;
         S.recs.set(op.id, { id: op.id, ...rec, _t: t });
-        if (merged) { const c = tidy(await decJSON(S.key, rec)); c.id = op.id; const k = S.clients.findIndex(x => x.id === op.id); k < 0 ? S.clients.push(c) : (S.clients[k] = c); }
+        if (merged) { const c = tidy(await decJSON(S.key, rec)); c.id = op.id; placeClient(c); }
         writeCache();
       }
       return;
@@ -145,8 +165,13 @@ async function push(k, op) {
     try { return await sendOp(op); }
     catch (e) { if (!isNet(e)) throw e; setOffline(true); }
   }
+  const before = OUT.get(k);
   OUT.delete(k); OUT.set(k, op); // re-insert, so the queue keeps the order the changes were made in
-  await saveOutbox();
+  if (!(await saveOutbox())) {
+    // Couldn't keep it on this device either: undo, so the app never claims a change it can't keep.
+    OUT.delete(k); if (before) OUT.set(k, before);
+    throw new Error('Not saved: you’re offline and this device’s storage is full. Free up some space and try again.');
+  }
 }
 // Uploads waiting changes in order. Stops at the first failure and leaves the rest queued.
 function flushOutbox() {
@@ -169,12 +194,11 @@ function setOffline(on) {
 // Saves on this device straight away, then uploads (or queues the upload). If the upload is
 // refused for a reason other than the connection, the change is undone here too.
 async function saveClient(c) {
-  const e = await encJSON(S.key, c), prev = S.recs.get(c.id), prevClient = S.clients.find(x => x.id === c.id);
+  const e = await encJSON(S.key, c), prev = S.recs.get(c.id), prevClient = [...S.clients, ...S.trash].find(x => x.id === c.id);
   const rec = { iv: e.iv, ct: e.ct, updated: c.updated };
   const put = (r, cl) => {
     r ? S.recs.set(c.id, r) : S.recs.delete(c.id);
-    const i = S.clients.findIndex(x => x.id === c.id);
-    if (!cl) S.clients = S.clients.filter(x => x.id !== c.id); else i < 0 ? S.clients.push(cl) : (S.clients[i] = cl);
+    cl ? placeClient(cl) : dropClient(c.id);
   };
   put({ id: c.id, ...rec, _t: prev?._t }, c);
   writeCache();
@@ -183,7 +207,7 @@ async function saveClient(c) {
 }
 async function deleteClient(id) {
   await push('c:' + id, { t: 'del', id });
-  S.recs.delete(id); S.clients = S.clients.filter(c => c.id !== id);
+  S.recs.delete(id); dropClient(id);
   writeCache();
 }
 async function saveMeta() {
@@ -304,6 +328,7 @@ document.addEventListener('visibilitychange', () => {
   if (!S) return;
   if (document.hidden) {
     hiddenAt = Date.now();
+    keepDraft();
     if (suppressLock || Date.now() < graceUntil) return;
     document.body.classList.add('cover');
     if (settings.lockAfter === 0) lock(true);
@@ -317,19 +342,25 @@ document.addEventListener('visibilitychange', () => {
 // Face ID starts by itself only when the app is opened or brought back — not right after
 // "Lock now" or an idle lock while the screen is on, which would just ask again at once.
 let bioAuto = true;
-// A half-filled client form is kept when the app locks — encrypted, in memory only — and opened
-// again after unlocking. Signing out drops it.
+// A half-filled client form is kept when the app locks, is closed or is reloaded — encrypted with
+// the vault key, in memory and on this device — and opened again after unlocking (for up to a week).
+// Leaving the form normally, or signing out, drops it.
 let DRAFT = null, EDIT_DRAFT = null;
+const draftKey = () => 'draft:' + DB.user.uid;
 function keepDraft() {
   const d = S && cur.v === 'edit' && EDIT_DRAFT?.();
-  if (d) encJSON(S.key, d).then(x => { DRAFT = x; }, () => {});
+  if (!d) return;
+  encJSON(S.key, d).then(x => { DRAFT = { ...x, at: Date.now() }; return store.set(draftKey(), DRAFT); }).catch(() => {});
 }
+const dropDraft = () => { DRAFT = null; if (DB.user) store.del(draftKey()).catch(() => {}); };
 async function restoreDraft() {
-  if (!DRAFT) return false;
-  const x = DRAFT; DRAFT = null;
+  const x = DRAFT || await store.get(draftKey()).catch(() => null);
+  dropDraft();
+  if (!x || Date.now() - (x.at || 0) > 7 * 864e5) return false;
   try { const d = await decJSON(S.key, x); go('edit', { id: d.id, draft: d }); toast('Your unsaved changes are back'); return true; }
   catch { return false; }
 }
+addEventListener('pagehide', keepDraft);
 function lock(auto = false) {
   keepDraft();
   bioAuto = auto;
@@ -342,7 +373,8 @@ function lock(auto = false) {
 // A session that expired (msg set) keeps waiting changes, so they upload after signing in again.
 async function signOut(msg) {
   if (DB.user) { await store.del(cacheKey()).catch(() => {}); writeLS(bioKey(), null); if (!msg) await store.del(outboxKey()).catch(() => {}); }
-  OUT = new Map(); DRAFT = null; writeLS('cv-brand', null);
+  if (DB.user) dropDraft();
+  OUT = new Map(); writeLS('cv-brand', null);
   S = null; PV = null;
   DB.signOut();
   renderSignIn(msg);

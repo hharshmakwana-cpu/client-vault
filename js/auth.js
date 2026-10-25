@@ -189,7 +189,7 @@ function renderCreate() {
       const m = await encJSON(key, { customFields: [] });
       const vault = { ...(await wrapDek(a, raw)), metaIv: m.iv, metaCt: m.ct, created: Date.now() };
       await DB.putVault(vault);
-      S = { key, raw, vault, meta: { customFields: [] }, clients: [], recs: new Map(), offline: false, syncedAt: Date.now() };
+      S = { key, raw, vault, meta: { customFields: [] }, clients: [], trash: [], recs: new Map(), offline: false, syncedAt: Date.now() };
       PV = { vault, offline: false };
       writeCache(); lastActive = Date.now();
       go('welcome');
@@ -205,7 +205,7 @@ async function finishUnlock(raw) {
   await loadOutbox();
   const cache = await store.get(cacheKey()).catch(() => null);
   let offline = PV.offline;
-  S = { key: await dataKey(raw), raw, vault: PV.vault, meta: {}, clients: [], recs: new Map(), offline, syncedAt: 0, loading: true };
+  S = { key: await dataKey(raw), raw, vault: PV.vault, meta: {}, clients: [], trash: [], recs: new Map(), offline, syncedAt: 0, loading: true };
   // Start from this device's copy: it has the changes still waiting to upload, and the versions they're based on.
   if (OUT.has('vault') && cache?.vault) S.vault = { ...S.vault, metaIv: cache.vault.metaIv, metaCt: cache.vault.metaCt, _t: cache.vault._t };
   try { await applyMeta(); } catch { S.meta = { customFields: [] }; }
@@ -224,6 +224,7 @@ async function finishUnlock(raw) {
     }
   }
   S.offline = offline; S.loading = false;
+  if (!offline) purgeTrash();
   if (!offline) writeCache();
   lastActive = Date.now();
   if (S.merged) { toast('Changes from another device were combined with yours'); S.merged = 0; }

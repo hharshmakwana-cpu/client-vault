@@ -35,9 +35,32 @@ function readLS(k) { try { return JSON.parse(localStorage.getItem(k)); } catch {
 function writeLS(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 const fmtDate = t => t ? new Date(typeof t === 'string' ? t + 'T00:00:00' : t).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
 const fmtTime = t => new Date(t).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+// A real calendar date written YYYY-MM-DD (checks the month, the day, and leap years).
+// JavaScript's own date parsing quietly turns 31 February into 3 March, so it isn't relied on.
+function validYmd(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || '');
+  if (!m) return false;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  const days = [31, y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
+  return y >= 1800 && y <= 2200 && mo >= 1 && mo <= 12 && d >= 1 && d <= days;
+}
+const ymdOf = t => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 let toastTimer;
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2800); }
+// action: optional { label, fn } — shows a button (e.g. Undo) and keeps the message up a little longer.
+function toast(msg, action) {
+  const t = $('#toast');
+  t.textContent = msg;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-act'; b.textContent = action.label;
+    b.onclick = () => { t.classList.remove('show'); action.fn(); };
+    t.append(' ', b);
+  }
+  t.classList.toggle('has-act', !!action);
+  t.classList.add('show'); clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), action ? 6000 : 2800);
+}
 
 // ---------- local key-value store (IndexedDB) ----------
 const store = (() => {

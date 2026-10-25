@@ -72,7 +72,8 @@ const R = [], check = (n, ok, i = '') => R.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${
     S.meta.firmInfo = {}; S.meta.templates = undefined; S.meta.ext = {}; S.meta.firm = ''; await saveMeta();
     go('import', data); await new Promise(r => setTimeout(r, 300));
     document.querySelector('#pw').value = 'Master-pass-2026';
-    document.querySelector('#f').requestSubmit(); await new Promise(r => setTimeout(r, 2500));
+    document.querySelector('#f').requestSubmit(); await new Promise(r => setTimeout(r, 1500));
+    document.querySelector('[data-act="restore"]').click(); await new Promise(r => setTimeout(r, 2500));
     return { city: S.meta.firmInfo?.city, firm: S.meta.firm, tpl: S.meta.templates?.length, ext: Object.keys(S.meta.ext || {}).length };
   });
   check('backup restores firm details, messages and extensions', restored.city === 'Ahmedabad' && restored.firm === 'Makwana & Associates' && restored.tpl === 1 && restored.ext === 1, JSON.stringify(restored));

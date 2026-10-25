@@ -51,7 +51,7 @@ function renderWelcome(a = {}) {
     const prev = { ...S.meta };
     Object.assign(S.meta, data, { setupDone: true });
     if (b) b.disabled = true;
-    try { await saveMeta(); cacheBrand(); a.edit ? (toast('Saved'), backTo()) : go('list'); }
+    try { await saveMeta(); cacheBrand(); a.edit ? (toast(savedMsg('Saved')), backTo()) : go('list'); }
     catch (e) { S.meta = prev; if (b) b.disabled = false; toast(errText(e)); }
   };
   ACT.skip = () => done(null, {});

@@ -22,3 +22,4 @@ Run them all from the repository root:
 | team | sign-up, email verification, owner approval, erase data, delete account |
 | conflict | two devices editing the same client — both changes kept |
 | audit | every problem from the October 2026 audit stays fixed |
+| data-safety | real dates only, safe backup restore, Recently deleted with Undo, fee corrections and credit notes, unsaved forms kept, honest offline messages |

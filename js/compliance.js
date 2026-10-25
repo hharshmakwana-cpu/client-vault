@@ -116,9 +116,17 @@ function ago(s) {
 
 // ---------- fees ----------
 const inr = n => '₹' + (Math.round((+n || 0) * 100) / 100).toLocaleString('en-IN');
+// Ledger entries: 'bill' (invoice), 'rcpt' (payment received), 'credit' (credit note against an
+// invoice — lowers what was billed), 'refund' (money paid back — lowers what was received).
+// What each entry does to the client's balance:
+const feeSign = e => e.kind === 'bill' || e.kind === 'refund' ? 1 : -1;
 function feeTotals(c) {
   let billed = 0, received = 0;
-  for (const e of c.fees) e.kind === 'bill' ? (billed += +e.amt) : (received += +e.amt);
+  for (const e of c.fees) {
+    if (e.kind === 'bill') billed += +e.amt; else if (e.kind === 'credit') billed -= +e.amt;
+    else if (e.kind === 'refund') received -= +e.amt; else received += +e.amt;
+  }
+  billed = Math.round(billed * 100) / 100; received = Math.round(received * 100) / 100;
   return { billed, received, due: Math.round((billed - received) * 100) / 100 };
 }
 

@@ -73,12 +73,12 @@ function renderExt(a = {}) {
   const save = async (next, msg) => {
     const prev = S.meta.ext;
     S.meta.ext = next;
-    try { await saveMeta(); toast(msg); go('ext', a, true); } catch (e) { S.meta.ext = prev; toast(errText(e)); }
+    try { await saveMeta(); toast(savedMsg(msg)); go('ext', a, true); } catch (e) { S.meta.ext = prev; toast(errText(e)); }
   };
   ACT.xadd = () => {
     const o = per.selectedOptions[0];
     if (!o) return toast('Choose a period');
-    if (!to.value) { toast('Choose the new due date'); return to.focus(); }
+    if (!to.value || !validYmd(to.value)) { toast('Choose the new due date'); return to.focus(); }
     if (to.value <= o.dataset.due) return toast('The new date should be after the original due date');
     save({ ...ext, [`${code.value}|${per.value}`]: to.value }, `Extended to ${fmtDate(to.value)} for all clients`);
   };
@@ -133,6 +133,8 @@ function renderTask(a) {
     const feeText = $('#fee')?.value.trim() || '', fee = feeText ? parseAmount(feeText) : 0;
     if (feeText && !(fee > 0)) { toast('Enter the fee as an amount, e.g. 2500 or 2,500.50'); return $('#fee').focus(); }
     const due = $('#due').value || t.std;
+    if (!validYmd(due)) { toast('Enter a real due date'); return $('#due').focus(); }
+    if (DONE.has(st) && $('#on').value && (!validYmd($('#on').value) || $('#on').value > today)) { toast('Enter the date it was filed (not in the future)'); return $('#on').focus(); }
     const nw = { s: st, ack: $('#ack').value.trim().toUpperCase(), note: $('#note').value.trim() };
     if (DONE.has(st)) nw.on = $('#on').value || today;
     if (due !== t.std) nw.due = due;
@@ -146,7 +148,7 @@ function renderTask(a) {
         d.work[t.key] = nw;
       });
       if (newNo) await noteNo(newNo);
-      toast(newNo ? `Saved · invoice ${newNo} added` : 'Saved'); backTo();
+      toast(savedMsg(newNo ? `Saved · invoice ${newNo} added` : 'Saved')); backTo();
     } catch (e) { b.disabled = false; toast(errText(e)); }
   };
 }
@@ -186,7 +188,7 @@ function renderComp(a) {
     b.disabled = true;
     try {
       await updateClient(c, d => { d.comp = Object.fromEntries([...sel].map(k => [k, c.comp[k] || start])); });
-      toast(sel.size ? `Tracking ${plural(sel.size, 'return')}` : 'Saved'); backTo();
+      toast(savedMsg(sel.size ? `Tracking ${plural(sel.size, 'return')}` : 'Saved')); backTo();
     } catch (e) { b.disabled = false; toast(errText(e)); }
   };
 }
@@ -209,8 +211,9 @@ function renderFees(id) {
     <button type="button" class="row link" data-act="fadd" style="justify-content:center;font-weight:600">Add entry</button>
   </div></form>`;
   const entries = [...c.fees].sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
-  html += entries.length ? `<div class="group-h">Ledger</div><div class="group">${entries.map(e => `<button class="row" data-act="doc" data-i="${esc(e.id)}"><span class="grow">${esc(e.desc || (e.kind === 'bill' ? 'Professional fees' : 'Payment received'))}<small>${fmtDate(e.date)} · ${e.kind === 'bill' ? 'Invoice' : 'Payment'}${e.no ? ' · ' + esc(e.no) : ''}${e.mode ? ' · ' + esc(e.mode) : ''}</small></span><span class="amt${e.kind === 'bill' ? '' : ' in'}">${e.kind === 'bill' ? '' : '−'}${inr(e.amt)}</span><span class="chev">${I.chev}</span></button>`).join('')}</div>
-    <p class="foot">Tap an entry for its invoice or receipt — share it as a PDF, or delete the entry.</p>` : `<div class="empty"><b>No entries yet</b>Add an invoice when you agree a fee, and a payment when it’s received.</div>`;
+  const label = e => e.desc || { bill: 'Professional fees', rcpt: 'Payment received', credit: 'Credit note', refund: 'Refund paid' }[e.kind];
+  html += entries.length ? `<div class="group-h">Ledger</div><div class="group">${entries.map(e => `<button class="row" data-act="doc" data-i="${esc(e.id)}"><span class="grow">${esc(label(e))}<small>${fmtDate(e.date)} · ${FEE_KIND[e.kind]}${e.no ? ' · ' + esc(e.no) : ''}${e.mode ? ' · ' + esc(e.mode) : ''}${e.history?.length ? ' · corrected' : ''}</small></span><span class="amt${feeSign(e) < 0 ? ' in' : ''}">${feeSign(e) < 0 ? '−' : ''}${inr(e.amt)}</span><span class="chev">${I.chev}</span></button>`).join('')}</div>
+    <p class="foot">Tap an entry to share it as a PDF, correct it, or add a credit note or refund.</p>` : `<div class="empty"><b>No entries yet</b>Add an invoice when you agree a fee, and a payment when it’s received.</div>`;
   if (f.due > 0) html += `<div class="group"><button class="row link" data-act="remindfee">Send fees reminder on WhatsApp</button></div>`;
   app.innerHTML = html;
   $('#ff').onsubmit = e => e.preventDefault();
@@ -224,6 +227,7 @@ function renderFees(id) {
     const amt = parseAmount($('#amt').value);
     if (!(amt > 0)) { toast('Enter the amount, e.g. 2500 or 2,500.50'); return $('#amt').focus(); }
     const date = $('#fdate').value || today;
+    if (!validYmd(date)) { toast('Enter a real date'); return $('#fdate').focus(); }
     if (date > today) return toast('The date can’t be in the future');
     b.disabled = true;
     try {
@@ -231,7 +235,7 @@ function renderFees(id) {
       if (kind === 'rcpt') { if ($('#fmode').value) e.mode = $('#fmode').value; if ($('#fref').value.trim()) e.ref = $('#fref').value.trim(); }
       await updateClient(c, d => d.fees.push(e));
       await noteNo(e.no);
-      toast(`${kind === 'bill' ? 'Invoice' : 'Receipt'} ${e.no} added`); go('fees', id, true);
+      toast(savedMsg(`${kind === 'bill' ? 'Invoice' : 'Receipt'} ${e.no} added`)); go('fees', id, true);
     } catch (e) { b.disabled = false; toast(errText(e)); }
   };
   ACT.doc = b => go('doc', { id, e: b.dataset.i });
@@ -329,7 +333,7 @@ function renderTemplates() {
     const prev = { templates: S.meta.templates };
     S.meta.templates = out;
     b.disabled = true;
-    try { await saveMeta(); toast('Saved'); backTo(); }
+    try { await saveMeta(); toast(savedMsg('Saved')); backTo(); }
     catch (e) { Object.assign(S.meta, prev); b.disabled = false; toast(errText(e)); }
   };
 }

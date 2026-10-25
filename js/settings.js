@@ -26,7 +26,8 @@ function renderSettings() {
     <div class="group-h">Backup</div>
     <div class="group">
       <button class="row link" data-act="export">Export encrypted backup</button>
-      <button class="row link" data-act="import">Import backup</button>
+      <button class="row link" data-act="import">Restore from a backup</button>
+      <button class="row" data-act="trash"><span class="grow">Recently deleted</span>${S.trash.length ? `<span class="val">${S.trash.length}</span>` : ''}<span class="chev">${I.chev}</span></button>
     </div>
     <p class="foot">${settings.lastBackup ? 'Last exported ' + fmtDate(settings.lastBackup) + '. ' : ''}A backup opens only with the master password used when it was made. Keep one in iCloud Drive or Google Drive.</p>
     <div class="group"><button class="row" data-act="adv" aria-expanded="${!!adv}"><span class="grow">More options<small>Excel import/export, due date extensions, custom fields, password reminders</small></span><span class="chev${adv ? ' open' : ''}">${I.chev}</span></button></div>
@@ -85,7 +86,7 @@ function renderSettings() {
     if (!label) return $('#cfName').focus();
     if (cf.some(f => f.label.toLowerCase() === label.toLowerCase())) return toast('That field already exists');
     cf.push({ id: uid(), label, secret: $('[data-act="cfsec"]').classList.contains('on') });
-    try { await saveMeta(); toast('Field added'); renderSettings(); } catch (e) { cf.pop(); toast(errText(e)); }
+    try { await saveMeta(); toast(savedMsg('Field added')); renderSettings(); } catch (e) { cf.pop(); toast(errText(e)); }
   };
   ACT.cfdel = async t => {
     const f = cf.find(x => x.id === t.dataset.id);
@@ -96,7 +97,7 @@ function renderSettings() {
   $('#pwDays').onchange = async e => {
     const prev = S.meta.pwDays;
     S.meta.pwDays = +e.target.value;
-    try { await saveMeta(); toast('Reminder updated'); } catch (er) { S.meta.pwDays = prev; toast(errText(er)); }
+    try { await saveMeta(); toast(savedMsg('Reminder updated')); } catch (er) { S.meta.pwDays = prev; toast(errText(er)); }
   };
   ACT.adv = t => {
     settings.advOpen = !settings.advOpen; saveSettings();
@@ -107,6 +108,7 @@ function renderSettings() {
   ACT.templates = () => go('templates');
   ACT.team = () => { if (needOnline()) go('team'); };
   ACT.erase = () => go('erase');
+  ACT.trash = () => go('trash');
   ACT.delacct = () => go('erase', { account: true });
   ACT.firm = () => go('firm');
   ACT.ext = () => go('ext', { back: 'settings' });
@@ -173,50 +175,90 @@ function renderChangePw() {
   };
 }
 
+// Restoring a backup: everything is opened and checked first, then a preview shows what will
+// change, and only then is anything written. A damaged backup changes nothing. Clients you
+// already have stay; where the backup holds a newer copy of one, that copy replaces yours.
+const BACKUP_VERSIONS = [undefined, 1, 2];
 function renderImport(b) {
-  app.innerHTML = bar({ left: backBtn('Settings', 'back'), title: 'Import Backup' }) + `
+  const bar_ = bar({ left: backBtn('Settings', 'back'), title: 'Restore backup' });
+  ACT.back = () => goBack('settings');
+  if (!BACKUP_VERSIONS.includes(b.v)) {
+    app.innerHTML = bar_ + `<div class="empty"><b>Can’t open this backup</b>It was made by a newer version of the app. Reload the app to update it, then try again.</div>`;
+    return;
+  }
+  app.innerHTML = bar_ + `
     <form id="f" class="pad" autocomplete="off">
       <div class="stack" style="max-width:none">
-        <p class="hint" style="margin:0 2px 6px">Backup from ${fmtDate(b.saved)} with ${plural(b.clients.length, 'client')}. Clients you already have are kept; the newer copy wins.</p>
+        <p class="hint" style="margin:0 2px 6px">Backup from ${fmtDate(b.saved)} with ${plural(b.clients.length, 'client')}. Nothing changes until you’ve seen what it contains and tapped Restore.</p>
         <input class="field" id="pw" type="password" placeholder="Master password used for this backup" autocomplete="off">
-        <button class="btn primary" id="go" type="submit">Import</button>
+        <button class="btn primary" id="go" type="submit">Open backup</button>
         <p class="err" id="err" role="alert"></p>
       </div>
     </form>`;
-  ACT.back = () => goBack('settings');
   $('#f').onsubmit = async e => {
     e.preventDefault();
     const btn = $('#go'), er = $('#err');
-    btn.disabled = true; btn.textContent = 'Decrypting…';
+    btn.disabled = true; btn.textContent = 'Opening…';
+    const fail = msg => { btn.disabled = false; btn.textContent = 'Open backup'; er.textContent = msg; };
     let key;
     try { key = await dataKey(await unwrapDek($('#pw').value, b.vault)); }
-    catch { btn.disabled = false; btn.textContent = 'Import'; return (er.textContent = 'Wrong password for this backup.'); }
-    try {
-      let n = 0;
-      if (b.vault.metaCt) {
-        // Settings from the backup fill in whatever isn't set here: firm details (with the logo),
-        // messages, due date extensions, work handled, invoice numbering. Anything already set here is kept.
-        const meta = await decJSON(key, { iv: b.vault.metaIv, ct: b.vault.metaCt }), M = S.meta, before = stable(M);
-        const empty = v => v == null || v === '' || (Array.isArray(v) && !v.length) || (isObj(v) && !Object.keys(v).length);
-        const have = new Set(M.customFields.map(f => f.id));
-        M.customFields.push(...(meta.customFields || []).filter(f => !have.has(f.id)));
-        M.ext = { ...meta.ext, ...M.ext };
-        const seq = { ...meta.seq };
-        for (const [k, n] of Object.entries(M.seq || {})) seq[k] = Math.max(n, seq[k] || 0);
-        M.seq = seq;
-        if (isObj(meta.firmInfo)) { M.firmInfo ||= {}; for (const [k, v] of Object.entries(meta.firmInfo)) if (empty(M.firmInfo[k]) && !empty(v)) M.firmInfo[k] = v; }
-        for (const k of ['firm', 'templates', 'services', 'pwDays', 'setupDone']) if (empty(M[k]) && !empty(meta[k])) M[k] = meta[k];
-        if (stable(M) !== before) { await saveMeta(); cacheBrand(); }
-      }
-      for (const r of b.clients) {
-        const c = tidy(await decJSON(key, r)); c.id = r.id;
-        const mine = S.clients.find(x => x.id === c.id);
-        if (mine && (mine.updated || 0) >= (c.updated || 0)) continue;
-        btn.textContent = `Importing ${++n}…`;
-        await saveClient(c);
-      }
-      toast(n ? `Imported ${plural(n, 'client')}` : 'Nothing new to import');
-      go('list');
-    } catch (ex) { btn.disabled = false; btn.textContent = 'Import'; er.textContent = errText(ex); }
+    catch { return fail('Wrong password for this backup.'); }
+    // Open everything before changing anything.
+    let meta = null;
+    const items = [], damaged = [];
+    try { if (b.vault.metaCt) meta = await decJSON(key, { iv: b.vault.metaIv, ct: b.vault.metaCt }); }
+    catch { return fail('This backup’s settings are damaged, so nothing was restored.'); }
+    for (const r of b.clients) {
+      try {
+        if (!r || typeof r.id !== 'string' || typeof r.iv !== 'string' || typeof r.ct !== 'string') throw 0;
+        const c = await decJSON(key, r);
+        if (!isObj(c) || typeof c.name !== 'string' || !c.name.trim()) throw 0;
+        c.id = r.id; items.push(tidy(c));
+      } catch { damaged.push(r?.id || '?'); }
+    }
+    if (damaged.length) return fail(`${plural(damaged.length, 'client')} in this backup ${damaged.length === 1 ? 'is' : 'are'} damaged, so nothing was restored. Try another backup file.`);
+    const all = [...S.clients, ...S.trash];
+    const plan = items.map(c => { const mine = all.find(x => x.id === c.id); return { c, kind: !mine ? 'new' : (c.updated || 0) > (mine.updated || 0) ? 'newer' : 'same' }; });
+    const count = k => plan.filter(x => x.kind === k).length, nNew = count('new'), nNewer = count('newer'), nSame = count('same');
+    renderPreview(key, meta, plan, nNew, nNewer, nSame);
   };
+  function renderPreview(key, meta, plan, nNew, nNewer, nSame) {
+    const todo = plan.filter(x => x.kind !== 'same');
+    app.innerHTML = bar_ + `<div class="tiles"><div class="tile green"><b>${nNew}</b><span>New clients</span></div><div class="tile blue"><b>${nNewer}</b><span>Newer copies</span></div><div class="tile"><b>${nSame}</b><span>Already up to date</span></div></div>
+      <p class="foot" style="margin:0 34px 16px">New clients are added. Where the backup has a newer copy of a client, it replaces yours. Nothing else is changed or removed. Settings missing here (firm details, logo, messages, extensions) are filled in from the backup.</p>
+      ${todo.length ? `<div class="group-h">Will change</div><div class="group">${todo.slice(0, 50).map(x => `<div class="row"><span class="grow">${esc(x.c.name)}<small>${x.kind === 'new' ? 'New' : 'Newer copy from ' + fmtDate(x.c.updated)}</small></span></div>`).join('')}${todo.length > 50 ? `<div class="row"><span class="grow muted">and ${todo.length - 50} more</span></div>` : ''}</div>` : ''}
+      <div class="pad"><button class="btn primary" id="go" data-act="restore">${todo.length ? `Restore ${plural(todo.length, 'client')}` : 'Restore settings only'}</button><p class="err" id="err" role="alert"></p></div>`;
+    ACT.restore = async btn => {
+      btn.disabled = true;
+      let done = 0;
+      try {
+        if (meta) await mergeBackupMeta(meta);
+        for (const x of todo) { btn.textContent = `Restoring ${done + 1} of ${todo.length}…`; await saveClient(x.c); done++; }
+        // Check the result against the backup.
+        const have = [...S.clients, ...S.trash];
+        const missing = todo.filter(x => !have.some(c => c.id === x.c.id && c.name === x.c.name));
+        if (missing.length) throw new Error(`${plural(missing.length, 'client')} didn’t restore`);
+        toast(savedMsg(todo.length ? `Restored ${plural(todo.length, 'client')}` : 'Settings restored'));
+        go('list');
+      } catch (ex) {
+        btn.disabled = false; btn.textContent = 'Try again';
+        $('#err').textContent = `${done ? `${done} restored, then it stopped: ` : ''}${errText(ex)}. Trying again is safe — clients already restored are skipped.`;
+      }
+    };
+  }
+}
+// Settings from a backup fill in whatever isn't set here: firm details (with the logo), messages,
+// due date extensions, work handled, invoice numbering. Anything already set here is kept.
+async function mergeBackupMeta(meta) {
+  const M = S.meta, before = stable(M);
+  const empty = v => v == null || v === '' || (Array.isArray(v) && !v.length) || (isObj(v) && !Object.keys(v).length);
+  const have = new Set(M.customFields.map(f => f.id));
+  M.customFields.push(...(meta.customFields || []).filter(f => !have.has(f.id)));
+  M.ext = { ...meta.ext, ...M.ext };
+  const seq = { ...meta.seq };
+  for (const [k, n] of Object.entries(M.seq || {})) seq[k] = Math.max(n, seq[k] || 0);
+  M.seq = seq;
+  if (isObj(meta.firmInfo)) { M.firmInfo ||= {}; for (const [k, v] of Object.entries(meta.firmInfo)) if (empty(M.firmInfo[k]) && !empty(v)) M.firmInfo[k] = v; }
+  for (const k of ['firm', 'templates', 'services', 'pwDays', 'setupDone']) if (empty(M[k]) && !empty(meta[k])) M[k] = meta[k];
+  if (stable(M) !== before) { await saveMeta(); cacheBrand(); }
 }

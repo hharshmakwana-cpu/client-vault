@@ -80,11 +80,14 @@ function cacheBrand() {
 const fyLabel = s => `${s}-${String(s + 1).slice(2)}`;
 // Numbers run per financial year, e.g. INV/2026-27/001. The highest number ever given in each
 // series is also kept in the settings (S.meta.seq), so a deleted invoice's number is never reused.
-const seriesOf = (kind, date) => { const F = firmInfo(); return `${kind === 'bill' ? F.invPrefix : F.rcptPrefix}/${fyLabel(fyStart(date))}/`; };
+const seriesOf = (kind, date) => { const F = firmInfo(); return `${{ bill: F.invPrefix, rcpt: F.rcptPrefix, credit: 'CN', refund: 'RF' }[kind]}/${fyLabel(fyStart(date))}/`; };
+const FEE_KIND = { bill: 'Invoice', rcpt: 'Payment', credit: 'Credit note', refund: 'Refund' };
+// How much of an invoice can still be credited, or of a payment refunded.
+const leftOf = (c, e) => round2(e.amt - c.fees.filter(x => x.of === e.id).reduce((s, x) => s + +x.amt, 0));
 function nextNo(kind, date) {
   const pre = seriesOf(kind, date);
   let max = S.meta.seq?.[pre] || 0;
-  for (const c of S.clients) for (const e of c.fees) if (e.no?.startsWith(pre)) max = Math.max(max, parseInt(e.no.slice(pre.length), 10) || 0);
+  for (const c of [...S.clients, ...S.trash]) for (const e of c.fees) if (e.no?.startsWith(pre)) max = Math.max(max, parseInt(e.no.slice(pre.length), 10) || 0);
   return pre + String(max + 1).padStart(3, '0');
 }
 // Records a number as given out (call after saving the entry that carries it).
@@ -126,14 +129,15 @@ function amountInWords(n) {
 function balanceAfter(c, e) {
   let bal = 0;
   const order = [...c.fees].sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
-  for (const x of order) { bal += x.kind === 'bill' ? +x.amt : -x.amt; if (x.id === e.id) break; }
+  for (const x of order) { bal += feeSign(x) * x.amt; if (x.id === e.id) break; }
   return round2(bal);
 }
 
 // ---------- the document, independent of how it is drawn ----------
 function docModel(c, e) {
-  const F = firmInfo(), bill = e.kind === 'bill', amt = round2(e.amt);
+  const F = firmInfo(), bill = e.kind === 'bill' || e.kind === 'credit', amt = round2(e.amt);
   const firmGst = GSTIN_RE.test(F.gstin || '') ? F.gstin : '', gst = bill && F.gstOn && firmGst;
+  const orig = e.of && c.fees.find(x => x.id === e.of);
   const clientGst = c.gst.find(g => GSTIN_RE.test(g.gstin))?.gstin || '';
   const firmLines = [...firmAddressLines(F), [F.phone, F.email].filter(Boolean).join(' · '),
     [F.pan && 'PAN ' + F.pan, firmGst && 'GSTIN ' + firmGst].filter(Boolean).join(' · ')].map(s => s.trim()).filter(Boolean);
@@ -145,13 +149,15 @@ function docModel(c, e) {
     [c.pan && 'PAN ' + c.pan, clientGst && 'GSTIN ' + clientGst].filter(Boolean).join(' · ')]
     .map(s => (s || '').trim()).filter(Boolean);
   const m = {
-    title: bill ? (gst ? 'TAX INVOICE' : 'INVOICE') : 'RECEIPT', no: e.no || nextNo(e.kind, e.date), date: fmtDate(e.date),
-    firm: { name: F.name || 'Your firm name', lines: firmLines }, toLabel: bill ? 'Bill to' : 'Received from', to: { name: c.name, lines: toLines },
+    title: { bill: gst ? 'TAX INVOICE' : 'INVOICE', rcpt: 'RECEIPT', credit: 'CREDIT NOTE', refund: 'REFUND VOUCHER' }[e.kind], no: e.no || nextNo(e.kind, e.date), date: fmtDate(e.date),
+    firm: { name: F.name || 'Your firm name', lines: firmLines }, toLabel: { bill: 'Bill to', rcpt: 'Received from', credit: 'Issued to', refund: 'Paid to' }[e.kind], to: { name: c.name, lines: toLines },
     rows: [], totals: [], words: amountInWords(amt), extra: [], signFor: F.name, signatory: F.signatory || '', logo: logoOf(),
     stateUnknown: !!gst && !toState,
   };
   if (bill) {
-    const desc = e.desc || 'Professional fees';
+    const desc = e.kind === 'credit'
+      ? `${e.desc || 'Reduction in fees'} — against invoice ${orig?.no || ''}${orig ? ` dated ${fmtDate(orig.date)}` : ''}`
+      : e.desc || 'Professional fees';
     if (gst) {
       // Amounts in the ledger include GST at 18%. Same state → CGST + SGST, else IGST.
       const taxable = round2(amt / 1.18), tax = round2(amt - taxable);
@@ -163,11 +169,18 @@ function docModel(c, e) {
       const pos = toState || firmState;
       m.extra.push({ label: 'GST details', lines: [`Place of supply: ${pos}${STATE_CODE[pos] ? ` (${STATE_CODE[pos]})` : ''}`, 'Tax payable on reverse charge: No'] });
     } else m.rows.push({ d: desc, amt });
-    m.totals.push({ l: 'Total', amt, strong: true });
+    m.totals.push({ l: e.kind === 'credit' ? 'Total credit' : 'Total', amt, strong: true });
     const bal = balanceAfter(c, e);
-    if (bal > amt) m.totals.push({ l: 'Total outstanding incl. this invoice', amt: bal });
-    const pay = firmBankLines(F);
-    if (pay.length) m.extra.push({ label: 'Payment details', lines: pay });
+    if (e.kind === 'bill') {
+      if (bal > amt) m.totals.push({ l: 'Total outstanding incl. this invoice', amt: bal });
+      const pay = firmBankLines(F);
+      if (pay.length) m.extra.push({ label: 'Payment details', lines: pay });
+    } else m.totals.push({ l: 'Balance due after this credit', amt: bal });
+  } else if (e.kind === 'refund') {
+    m.rows.push({ d: `Refund of payment ${orig?.no || ''}${orig ? ` received ${fmtDate(orig.date)}` : ''}${e.desc ? ` — ${e.desc}` : ''}`, amt });
+    m.totals.push({ l: 'Amount refunded', amt, strong: true });
+    const how = [e.mode && 'Paid by ' + e.mode, e.ref && 'Ref. ' + e.ref].filter(Boolean).join(' · ');
+    if (how) m.extra.push({ label: 'Refund', lines: [how] });
   } else {
     m.rows.push({ d: `Received towards ${e.desc || 'professional fees'}`, amt });
     m.totals.push({ l: 'Amount received', amt, strong: true });
@@ -368,8 +381,9 @@ function makePDF(m) {
 function renderDoc(a) {
   let c = S.clients.find(x => x.id === a.id), e = c?.fees.find(x => x.id === a.e);
   if (!e) return backTo();
-  const bill = e.kind === 'bill', F = firmInfo(), m = docModel(c, e);
-  let html = bar({ left: backBtn('Fees', 'back'), title: bill ? 'Invoice' : 'Receipt' });
+  const bill = e.kind === 'bill', F = firmInfo(), m = docModel(c, e), kindName = FEE_KIND[e.kind].toLowerCase();
+  const linked = c.fees.filter(x => x.of === e.id), left = leftOf(c, e);
+  let html = bar({ left: backBtn('Fees', 'back'), title: e.kind === 'rcpt' ? 'Receipt' : FEE_KIND[e.kind] });
   if (!F.name || !firmHasAddress(F)) html += `<button class="banner" data-act="firm"><span class="grow">Add your firm’s name and address so they appear on ${bill ? 'invoices' : 'receipts'}.</span><b class="bbtn">Set up</b></button>`;
   if (m.stateUnknown) html += `<button class="banner" data-act="editc"><span class="grow">Add ${esc(c.name)}’s state, so GST is split correctly (CGST + SGST or IGST).</span><b class="bbtn">Add</b></button>`;
   html += `<div class="paper" aria-label="${esc(m.title)} preview">${paperHTML(m)}</div>`;
@@ -379,11 +393,25 @@ function renderDoc(a) {
     <button class="row link" data-act="dl">Download PDF</button>
     <button class="row" data-act="firm"><span class="grow">Firm details</span><span class="chev">${I.chev}</span></button></div>`;
   if (!e.no) html += `<p class="foot">Number ${esc(m.no)} is given to this ${bill ? 'invoice' : 'receipt'} when you first share or download it.</p>`;
-  html += `<div class="group"><button class="row danger" data-act="del">Delete ${bill ? 'invoice' : 'payment'}</button></div>`;
+  // Corrections keep the history: edits remember the earlier values; credit notes and refunds are entries of their own.
+  const hist = (e.history || []).map(h => `<div class="row"><span class="grow">Corrected ${fmtDate(h.at)}<small>Was ${inr(h.amt)} · ${fmtDate(h.date)}${h.desc ? ' · ' + esc(h.desc) : ''}</small></span></div>`);
+  const links = linked.map(x => `<button class="row" data-act="open" data-i="${esc(x.id)}"><span class="grow">${FEE_KIND[x.kind]} ${esc(x.no || '')}<small>${fmtDate(x.date)}</small></span><span class="amt">−${inr(x.amt)}</span><span class="chev">${I.chev}</span></button>`);
+  if (hist.length || links.length) html += `<div class="group-h">History</div><div class="group">${[...links, ...hist].join('')}</div>`;
+  const orig = e.of && c.fees.find(x => x.id === e.of);
+  if (orig) html += `<div class="group"><button class="row" data-act="open" data-i="${esc(orig.id)}"><span class="grow">For ${FEE_KIND[orig.kind].toLowerCase()} ${esc(orig.no || '')}<small>${fmtDate(orig.date)} · ${inr(orig.amt)}</small></span><span class="chev">${I.chev}</span></button></div>`;
+  html += `<div class="group">
+    <button class="row link" data-act="fix">Correct this ${kindName}</button>
+    ${bill && left > 0 ? `<button class="row link" data-act="adj">Issue a credit note</button>` : ''}
+    ${e.kind === 'rcpt' && left > 0 ? `<button class="row link" data-act="adj">Record a refund</button>` : ''}
+    <button class="row danger" data-act="del">Delete ${kindName}</button></div>
+  <p class="foot">${bill ? 'To reduce or cancel an invoice you’ve already sent, issue a credit note — it keeps a record for GST.' : 'Corrections keep the earlier values in the history.'}</p>`;
   app.innerHTML = html;
   ACT.back = backTo;
   ACT.firm = () => go('firm', { back: a });
   ACT.editc = () => go('edit', c.id);
+  ACT.open = b => go('doc', { id: c.id, e: b.dataset.i });
+  ACT.fix = () => go('feefix', { id: c.id, e: e.id });
+  ACT.adj = () => go('feeadj', { id: c.id, e: e.id });
   // Builds the file right away (sharing must start straight from the tap) and saves the number
   // in the background the first time.
   const file = () => {
@@ -394,9 +422,12 @@ function renderDoc(a) {
     }
     return new File([makePDF(docModel(c, e))], docName(c, m), { type: 'application/pdf' });
   };
-  const msg = () => fillTpl(bill
-    ? `Dear {name}, please find attached our invoice ${m.no} dated ${m.date} for ${inr(e.amt)}. — {firm}`
-    : `Dear {name}, thank you for your payment of ${inr(e.amt)}. Our receipt ${m.no} is attached. — {firm}`, c);
+  const msg = () => fillTpl({
+    bill: `Dear {name}, please find attached our invoice ${m.no} dated ${m.date} for ${inr(e.amt)}. — {firm}`,
+    rcpt: `Dear {name}, thank you for your payment of ${inr(e.amt)}. Our receipt ${m.no} is attached. — {firm}`,
+    credit: `Dear {name}, please find attached our credit note ${m.no} for ${inr(e.amt)}. — {firm}`,
+    refund: `Dear {name}, we have refunded ${inr(e.amt)} to you. The refund voucher ${m.no} is attached. — {firm}`,
+  }[e.kind], c);
   const download = f => {
     const link = document.createElement('a');
     link.href = URL.createObjectURL(f); link.download = f.name; document.body.append(link); link.click();
@@ -419,15 +450,93 @@ function renderDoc(a) {
     openWhatsApp(c, msg());
   };
   ACT.del = async () => {
-    if (!confirm(`Delete this ${bill ? 'invoice' : 'payment'} of ${inr(e.amt)}?${e.no ? ` Its number ${e.no} won’t be given to another ${bill ? 'invoice' : 'receipt'}.` : ''}`)) return;
+    if (linked.length) return toast(`Delete its ${linked.map(x => FEE_KIND[x.kind].toLowerCase()).join(' and ')} first`);
+    if (!confirm(`Delete this ${kindName} of ${inr(e.amt)}? It’s removed from the ledger.${e.no ? ` Its number ${e.no} won’t be used again.` : ''}${bill ? ' To keep a record instead, issue a credit note.' : ''}`)) return;
     if (e.no) await noteNo(e.no);
     try {
       await updateClient(c, d => {
         d.fees = d.fees.filter(x => x.id !== e.id);
         for (const w of Object.values(d.work)) if (w.bill === e.id) delete w.bill;
       });
-      toast('Entry deleted'); backTo();
+      toast(savedMsg('Entry deleted')); backTo();
     } catch (er) { toast(errText(er)); }
+  };
+}
+
+// ---------- correcting a fee entry ----------
+// The earlier amount, date and description are kept in e.history and shown on the entry.
+function renderFeeFix(a) {
+  const c = S.clients.find(x => x.id === a.id), e = c?.fees.find(x => x.id === a.e);
+  if (!e) return backTo();
+  const pay = e.kind === 'rcpt' || e.kind === 'refund', today = todayStr();
+  let html = bar({ left: `<button class="nav-btn" data-act="back">Cancel</button>`, title: `Correct ${FEE_KIND[e.kind].toLowerCase()}`, right: `<button class="nav-btn strong" data-act="save">Done</button>` });
+  html += `<p class="foot" style="margin:0 34px 16px">${esc(e.no || '')} · ${esc(c.name)}. The earlier values are kept in the entry’s history.</p>`;
+  html += `<form id="xf" class="group" autocomplete="off">
+    <label class="frow"><span class="flabel">Amount (₹)</span><input class="finput" id="amt" inputmode="decimal" value="${round2(e.amt)}"></label>
+    <label class="frow"><span class="flabel">Date</span><input class="finput" type="date" id="fdate" value="${esc(e.date)}" max="${today}"></label>
+    <label class="frow"><span class="flabel">${pay ? 'Note' : 'For'}</span><input class="finput" id="fdesc" value="${esc(e.desc || '')}"></label>
+    ${pay ? `<label class="row"><span class="grow">Paid by</span><select class="plain" id="fmode"><option value="">—</option>${PAY_MODES.map(x => `<option${x === e.mode ? ' selected' : ''}>${x}</option>`).join('')}</select></label>
+    <label class="frow"><span class="flabel">Reference</span><input class="finput" id="fref" value="${esc(e.ref || '')}" autocomplete="off" autocorrect="off" spellcheck="false"></label>` : ''}
+  </form>`;
+  if (e.kind === 'bill' && e.no) html += `<p class="foot">If this invoice has already been sent, issuing a credit note is usually better than changing it.</p>`;
+  app.innerHTML = html;
+  $('#xf').onsubmit = ev => ev.preventDefault();
+  ACT.back = backTo;
+  ACT.save = async b => {
+    const amt = parseAmount($('#amt').value), date = $('#fdate').value;
+    if (!(amt > 0)) { toast('Enter the amount, e.g. 2500 or 2,500.50'); return $('#amt').focus(); }
+    if (!validYmd(date) || date > today) { toast('Enter a real date, not in the future'); return $('#fdate').focus(); }
+    const used = c.fees.filter(x => x.of === e.id).reduce((s, x) => s + +x.amt, 0);
+    if (amt < used) return toast(`Can’t go below ${inr(used)} — that much has already been credited or refunded against it`);
+    if (e.of) { const o = c.fees.find(x => x.id === e.of); if (o && amt > leftOf(c, o) + +e.amt) return toast(`At most ${inr(leftOf(c, o) + +e.amt)} for this entry`); }
+    const next = { amt, date, desc: $('#fdesc').value.trim(), ...(pay ? { mode: $('#fmode').value, ref: $('#fref').value.trim() } : {}) };
+    const changed = Object.keys(next).some(k => (next[k] || '') !== (k === 'amt' ? +e.amt : e[k] || ''));
+    if (!changed) return backTo();
+    b.disabled = true;
+    try {
+      await updateClient(c, d => {
+        const x = d.fees.find(y => y.id === e.id);
+        x.history = [...(x.history || []), { at: Date.now(), amt: x.amt, date: x.date, desc: x.desc || '', ...(pay ? { mode: x.mode || '', ref: x.ref || '' } : {}) }];
+        Object.assign(x, next);
+        if (!x.mode) delete x.mode; if (!x.ref) delete x.ref;
+      });
+      toast(savedMsg('Corrected')); backTo();
+    } catch (er) { b.disabled = false; toast(errText(er)); }
+  };
+}
+
+// ---------- credit note (against an invoice) / refund (against a payment) ----------
+function renderFeeAdj(a) {
+  const c = S.clients.find(x => x.id === a.id), e = c?.fees.find(x => x.id === a.e);
+  if (!e || !['bill', 'rcpt'].includes(e.kind)) return backTo();
+  const kind = e.kind === 'bill' ? 'credit' : 'refund', left = leftOf(c, e), today = todayStr();
+  let html = bar({ left: `<button class="nav-btn" data-act="back">Cancel</button>`, title: kind === 'credit' ? 'Credit note' : 'Refund', right: `<button class="nav-btn strong" data-act="save">Add</button>` });
+  html += `<p class="foot" style="margin:0 34px 16px">${kind === 'credit' ? `Against invoice ${esc(e.no || '')} of ${inr(e.amt)}. Lowers what ${esc(c.name)} owes.` : `For payment ${esc(e.no || '')} of ${inr(e.amt)}. Records money paid back to ${esc(c.name)}.`}${left < e.amt ? ` Up to ${inr(left)} is left.` : ''}</p>`;
+  html += `<form id="xf" class="group" autocomplete="off">
+    <label class="frow"><span class="flabel">Amount (₹)</span><input class="finput" id="amt" inputmode="decimal" value="${left}"></label>
+    <label class="frow"><span class="flabel">Date</span><input class="finput" type="date" id="fdate" value="${today}" max="${today}"></label>
+    <label class="frow"><span class="flabel">Reason</span><input class="finput" id="fdesc" placeholder="${kind === 'credit' ? 'e.g. Discount agreed, or invoice cancelled' : 'e.g. Paid twice by mistake'}"></label>
+    ${kind === 'refund' ? `<label class="row"><span class="grow">Paid by</span><select class="plain" id="fmode"><option value="">—</option>${PAY_MODES.map(x => `<option>${x}</option>`).join('')}</select></label>
+    <label class="frow"><span class="flabel">Reference</span><input class="finput" id="fref" placeholder="UTR / cheque no. (optional)" autocomplete="off" autocorrect="off" spellcheck="false"></label>` : ''}
+  </form>`;
+  app.innerHTML = html;
+  $('#xf').onsubmit = ev => ev.preventDefault();
+  ACT.back = backTo;
+  ACT.save = async b => {
+    const amt = parseAmount($('#amt').value), date = $('#fdate').value;
+    if (!(amt > 0)) { toast('Enter the amount, e.g. 2500 or 2,500.50'); return $('#amt').focus(); }
+    if (amt > left) { toast(`At most ${inr(left)} can be ${kind === 'credit' ? 'credited' : 'refunded'} against this`); return $('#amt').focus(); }
+    if (!validYmd(date) || date > today) { toast('Enter a real date, not in the future'); return $('#fdate').focus(); }
+    if (date < e.date) { toast(`The date can’t be before the ${FEE_KIND[e.kind].toLowerCase()} (${fmtDate(e.date)})`); return $('#fdate').focus(); }
+    const x = { id: uid(), kind, of: e.id, amt, date, desc: $('#fdesc').value.trim(), no: nextNo(kind, date) };
+    if (kind === 'refund') { if ($('#fmode').value) x.mode = $('#fmode').value; if ($('#fref').value.trim()) x.ref = $('#fref').value.trim(); }
+    b.disabled = true;
+    try {
+      await updateClient(c, d => d.fees.push(x));
+      await noteNo(x.no);
+      toast(savedMsg(`${FEE_KIND[kind]} ${x.no} added`));
+      go('doc', { id: c.id, e: x.id });
+    } catch (er) { b.disabled = false; toast(errText(er)); }
   };
 }
 
@@ -537,7 +646,7 @@ function renderFirm(a = {}) {
     const prev = { firmInfo: S.meta.firmInfo, firm: S.meta.firm };
     S.meta.firmInfo = info; S.meta.firm = v('name');
     b.disabled = true;
-    try { await saveMeta(); cacheBrand(); updateTabs(); toast('Saved'); backTo(); }
+    try { await saveMeta(); cacheBrand(); updateTabs(); toast(savedMsg('Saved')); backTo(); }
     catch (e) { Object.assign(S.meta, prev); b.disabled = false; toast(errText(e)); }
   };
 }

@@ -107,3 +107,42 @@ function renderErase(a = {}) {
     else { toast('All data erased'); openVault(); }
   };
 }
+
+// ---------- recently deleted ----------
+// A deleted client (with its invoices and payments) stays here for TRASH_DAYS days and can be
+// restored; after that it's removed for good the next time the app is opened.
+async function restoreClient(id) {
+  const c = S.trash.find(x => x.id === id);
+  if (!c) return;
+  try {
+    const d = await updateClient(c, x => { delete x.deleted; });
+    const dup = d.pan && S.clients.find(x => x.id !== d.id && x.pan === d.pan);
+    toast(savedMsg(dup ? `${d.name} restored — note: ${dup.name} has the same PAN` : `${d.name} restored`));
+    if (cur.v === 'list' || cur.v === 'trash') go(cur.v, cur.arg, true);
+  } catch (e) { toast(errText(e)); }
+}
+function purgeTrash() {
+  const cutoff = Date.now() - TRASH_DAYS * 864e5;
+  for (const c of S.trash.filter(x => x.deleted < cutoff)) deleteClient(c.id).catch(() => {});
+}
+function renderTrash() {
+  const list = [...S.trash].sort((a, b) => b.deleted - a.deleted);
+  let html = bar({ left: backBtn('Settings', 'back'), title: 'Recently deleted' });
+  html += `<p class="foot" style="margin:0 34px 16px">Deleted clients stay here for ${TRASH_DAYS} days, with their invoices and payments. Restore one to bring everything back.</p>`;
+  html += list.length ? `<div class="group">${list.map(c => {
+    const gone = fmtDate(c.deleted + TRASH_DAYS * 864e5), fees = feeTotals(c);
+    return `<div class="row lrow">${avatar(c.name)}<span class="lt"><b>${esc(c.name)}</b><small>Deleted ${ago(ymdOf(c.deleted))} · removed for good on ${gone}${c.fees.length ? ` · ${plural(c.fees.length, 'fee entry')}` : ''}${fees.due > 0 ? ` · ${inr(fees.due)} due` : ''}</small></span>
+      <button class="sendbtn" data-act="restore" data-id="${esc(c.id)}">Restore</button></div>`;
+  }).join('')}</div>
+  <div class="group"><button class="row danger" data-act="purge">Delete all of these now</button></div>`
+    : `<div class="empty"><b>Nothing here</b>Clients you delete appear here for ${TRASH_DAYS} days.</div>`;
+  app.innerHTML = html;
+  ACT.back = backTo;
+  ACT.restore = b => { b.disabled = true; restoreClient(b.dataset.id); };
+  ACT.purge = async b => {
+    if (!confirm(`Permanently delete ${plural(list.length, 'client')}, with their invoices and payments? This can’t be undone.`)) return;
+    b.disabled = true;
+    try { for (const c of list) await deleteClient(c.id); toast(savedMsg('Deleted for good')); go('trash', undefined, true); }
+    catch (e) { b.disabled = false; toast(errText(e)); }
+  };
+}

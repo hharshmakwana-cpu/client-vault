@@ -9,7 +9,7 @@ if ! curl -s -o /dev/null "$BASE"; then
   sleep 1
 fi
 failed=0
-for t in features new-user contacts firm-details logo screens face-id offline team conflict audit; do
+for t in features new-user contacts firm-details logo screens face-id offline team conflict audit data-safety; do
   out=$(timeout 300 node "$t.js" 2>&1); code=$?
   pass=$(grep -c '^PASS' <<<"$out"); fail=$(grep -c '^FAIL' <<<"$out")
   if [ $code -eq 0 ]; then echo "ok    $t ($pass checks)"; else echo "FAIL  $t"; grep -E '^FAIL|Error' <<<"$out" | head -5; failed=1; fi

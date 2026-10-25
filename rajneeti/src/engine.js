@@ -66,7 +66,7 @@ function newGame(o) {
     promisesKept: 0, promisesBroken: 0,
     camp: null, gov: null, eco: null, result: null, coal: null, report: null,
   };
-  startCampaign({ weeks: 12, funds: diff.funds, first: true });
+  startCampaign({ weeks: 10, funds: diff.funds, first: true });
   log(`${G.leader} launches the ${G.party} campaign. ${MAJORITY} seats needed for a majority.`, 'big');
   save();
 }
@@ -326,6 +326,17 @@ function actionBlocked(id, stateId, opt) {
   return null;
 }
 
+// The manifesto is chosen once, up front, as a hand of three promises.
+function choosePromises(ids) {
+  const C = G.camp;
+  C.promises = ids.slice(0, 3);
+  for (const id of C.promises) { const p = PROMISES.find(x => x.id === id); if (p.trust) G.trust = clamp(G.trust + p.trust, 0, 100); }
+  C.manifestoDone = true;
+  C.polls[C.polls.length - 1] = pollSnapshot();
+  log(`📜 Manifesto released: ${C.promises.map(id => PROMISES.find(x => x.id === id).name).join(', ')}.`, 'big');
+  save();
+}
+
 function addPromise(id) {
   const C = G.camp;
   if (C.event) return { err: 'Respond to the current event first' };
@@ -575,6 +586,53 @@ function previewDeficit(budget) {
   return d;
 }
 
+const BUDGET_PRESETS = {
+  populist:  { icon: '🎁', name: 'Populist', desc: 'More welfare & farm support, lower taxes. Popular now — deficit rises.', d: { welfare: .4, agri: .2, itr: -1, gst: -1 } },
+  balanced:  { icon: '⚖️', name: 'Balanced', desc: 'Steady as she goes. No surprises.', d: {} },
+  growth:    { icon: '🏗️', name: 'Growth', desc: 'Build roads, schools; cut corporate tax. Business cheers, pays off later.', d: { infra: .4, education: .15, health: .1, ctr: -2 } },
+  austerity: { icon: '✂️', name: 'Austerity', desc: 'Cut spending, raise GST. Deficit falls, voters grumble.', d: { welfare: -.3, infra: -.2, agri: -.1, gst: 1 } },
+};
+
+function budgetPreset(key) {
+  const b = G.eco.b, d = BUDGET_PRESETS[key].d, draft = {};
+  for (const k in BUDGET_LIMITS) {
+    const L = BUDGET_LIMITS[k];
+    draft[k] = Math.round(clamp(b[k] + (d[k] || 0), L.min, L.max) * 10) / 10;
+  }
+  const r = applyBudget(draft);
+  if (!r.err) r.msg = `${BUDGET_PRESETS[key].icon} ${BUDGET_PRESETS[key].name} Budget passed. Deficit ${round1(G.eco.deficit)}% of GDP.`;
+  return r;
+}
+
+// Each quarter the cabinet puts three policy cards on the table; you may play one.
+function dealHand() {
+  const g = G.gov;
+  const open = REFORMS.filter(r => !g.passed.includes(r.id));
+  const promised = open.filter(r => g.promises.some(id => PROMISES.find(p => p.id === id).check.toString().includes(`'${r.id}'`)));
+  const pool = open.slice().sort(() => rand() - .5);
+  const hand = [];
+  if (promised.length && rand() < .6) hand.push(pick(promised).id);
+  for (const r of pool) if (hand.length < 2 && !hand.includes(r.id)) hand.push(r.id);
+  const cards = hand.map(id => ({ type: 'bill', id }));
+  cards.push({ type: 'pm', id: pick(Object.keys(PM_ACTIONS)) });
+  g.hand = cards; g.played = false;
+}
+
+function playCard(i) {
+  const g = G.gov, c = g.hand[i];
+  if (g.played) return { err: 'You already played a card this quarter' };
+  const res = c.type === 'bill' ? introduceBill(c.id, 'vote') : pmAction(c.id);
+  if (!res.err) { g.played = true; save(); }
+  return res;
+}
+
+function billChance(id) {
+  const st = billStatus(id);
+  let lsSeats = govSeats() - st.objectors.reduce((t, a) => t + (a.sat - 15 < 35 ? a.seats : 0), 0);
+  const ls = lsSeats >= MAJORITY ? 1 : clamp(.45 + (overallApproval() - 50) / 100, 0, 1);
+  return ls * st.rsChance;
+}
+
 function isBudgetQuarter() { return G.calQ % 4 === 2 || G.gov.q === 0; }
 
 function applyBudget(budget) {
@@ -618,6 +676,7 @@ function startQuarter() {
   const g = G.gov;
   g.prDone = false; g.rbiDone = false; g.reshuffleDone = false;
   g.events = [];
+  dealHand();
   // scheduled events
   if (G.calQ % 4 === 1 && !g.flags.onoe) g.events.push({ id: 'stateelection', ctx: { states: pickStateElection() } });
   // random events
@@ -931,7 +990,7 @@ function goToElection(snap) {
   G.appeal.A = { ...RIVAL_APPEAL.A };
   G.term++;
   G.incumbent = 'you';
-  startCampaign({ weeks: snap ? 6 : 8, funds: 240 + Math.round(overallApproval() * 2), first: false, snap });
+  startCampaign({ weeks: snap ? 5 : 7, funds: 240 + Math.round(overallApproval() * 2), first: false, snap });
   log(snap ? 'Snap elections are called. Six weeks to save your premiership.' : `Five years done. The nation votes again. Campaign for term ${G.term}!`, 'big');
   save();
 }

@@ -1,10 +1,8 @@
 // RAJNEETI — interface. Renders G into #app and routes clicks to the engine.
 
-const UI = { screen: 'title', sel: null, tab: 'dash', draft: null, reveal: null, setup: null, toastT: null };
+const UI = { screen: 'title', sel: null, reveal: null, setup: null, toastT: null, picks: [] };
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const pct = (x, d = 1) => (x >= 0 ? '' : '') + x.toFixed(d) + '%';
-const signed = x => (x > 0 ? '+' : '') + Math.round(x);
 
 function partyColor(k, stateId, alliances) {
   if (k === 'you') return G.color;
@@ -21,7 +19,7 @@ function toast(msg, kind = '') {
   const t = $('#toast');
   t.textContent = msg; t.className = 'toast show ' + kind;
   clearTimeout(UI.toastT);
-  UI.toastT = setTimeout(() => { t.className = 'toast'; }, 2600);
+  UI.toastT = setTimeout(() => { t.className = 'toast'; }, 3000);
 }
 
 function handle(res) {
@@ -31,13 +29,6 @@ function handle(res) {
   render();
 }
 
-function spark(arr, color = 'var(--accent)', w = 110, h = 28) {
-  if (!arr || arr.length < 2) return `<svg width="${w}" height="${h}"></svg>`;
-  const lo = Math.min(...arr), hi = Math.max(...arr), r = hi - lo || 1;
-  const pts = arr.map((v, i) => `${(i / (arr.length - 1) * w).toFixed(1)},${(h - 3 - (v - lo) / r * (h - 6)).toFixed(1)}`).join(' ');
-  return `<svg width="${w}" height="${h}" class="spark"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/></svg>`;
-}
-
 function seatBar(you, A, others, labels = true) {
   const w = x => (x / TOTAL_SEATS * 100).toFixed(2) + '%';
   return `<div class="seatbar">
@@ -45,8 +36,12 @@ function seatBar(you, A, others, labels = true) {
     <div style="width:${w(others)};background:#6b7280"></div>
     <div style="width:${w(A)};background:${RIVALS.A.color}"></div>
     <span class="majline" title="272 for majority"></span>
-  </div>${labels ? `<div class="seatlabels"><span style="color:${G.color}">${esc(G.short)}+ ${you}</span><span class="muted">Majority 272</span><span style="color:${RIVALS.A.color}">${RIVALS.A.short}+ ${A}</span></div>` : ''}`;
+  </div>${labels ? `<div class="seatlabels"><span style="color:${G.color}">You ${you}</span><span class="muted">272 to win</span><span style="color:${RIVALS.A.color}">RSP ${A}</span></div>` : ''}`;
 }
+
+const effChips = blocs => Object.entries(blocs).map(([b, v]) => `<span class="chipfx ${v > 0 ? 'up' : 'down'}">${BLOCS.find(x => x.id === b).icon}${v > 0 ? '▲' : '▼'}</span>`).join('');
+const blocLegend = () => `<div class="blegend">${BLOCS.map(b => `<span>${b.icon} ${b.name}</span>`).join('')}</div>`;
+const face = v => v >= 62 ? '😀' : v >= 50 ? '🙂' : v >= 40 ? '😐' : v >= 28 ? '😠' : '🤬';
 
 // ---------------- title & setup ----------------
 function renderTitle() {
@@ -54,45 +49,38 @@ function renderTitle() {
     <div class="title-art">🏛️</div>
     <h1 class="logo">RAJNEETI</h1>
     <p class="tagline">Path to Power</p>
-    <p class="intro">Lead your party from the opposition benches to the Prime Minister's office. Win the Lok Sabha, build coalitions, run the economy, survive crises — and do it all again in five years.</p>
+    <p class="intro">Win the election. Become Prime Minister. Stay in power.</p>
     <div class="title-buttons">
       ${hasSave() ? '<button class="btn primary big" data-a="continue">▶ Continue</button>' : ''}
       <button class="btn ${hasSave() ? '' : 'primary'} big" data-a="newgame">New Game</button>
       <button class="btn ghost" data-a="help">How to Play</button>
     </div>
-    <p class="fine">Works fully offline · Your progress is saved on this device</p>
+    <p class="fine">Plays offline · Saves automatically</p>
   </div>`;
 }
 
 function renderSetup() {
   const s = UI.setup;
   return `<div class="setup">
-    <h2>Found your party</h2>
+    <h2>Start your party</h2>
     <label>Your name<input id="f-leader" maxlength="28" value="${esc(s.leader)}"></label>
     <label>Party name<input id="f-party" maxlength="36" value="${esc(s.party)}"></label>
-    <label>Short name<input id="f-short" maxlength="5" value="${esc(s.short)}"></label>
-    <div class="field"><span>Party symbol</span><div class="chips">${PARTY_SYMBOLS.map(x => `<button class="chip ${s.symbol === x ? 'on' : ''}" data-a="set" data-k="symbol" data-v="${x}">${x}</button>`).join('')}</div></div>
-    <div class="field"><span>Party colour</span><div class="chips">${PARTY_COLORS.map(c => `<button class="swatch ${s.color === c ? 'on' : ''}" style="background:${c}" data-a="set" data-k="color" data-v="${c}" aria-label="colour"></button>`).join('')}</div></div>
-    <div class="field"><span>Ideology</span><div class="cards3">${Object.entries(IDEOLOGIES).map(([k, v]) => `<button class="pick ${s.ideology === k ? 'on' : ''}" data-a="set" data-k="ideology" data-v="${k}"><b>${v.name}</b><small>${v.desc}</small></button>`).join('')}</div></div>
+    <div class="field"><span>Symbol & colour</span><div class="chips">${PARTY_SYMBOLS.map(x => `<button class="chip ${s.symbol === x ? 'on' : ''}" data-a="set" data-k="symbol" data-v="${x}">${x}</button>`).join('')}</div>
+      <div class="chips">${PARTY_COLORS.map(c => `<button class="swatch ${s.color === c ? 'on' : ''}" style="background:${c}" data-a="set" data-k="color" data-v="${c}" aria-label="colour"></button>`).join('')}</div></div>
+    <div class="field"><span>What do you stand for?</span><div class="cards3">${Object.entries(IDEOLOGIES).map(([k, v]) => `<button class="pick ${s.ideology === k ? 'on' : ''}" data-a="set" data-k="ideology" data-v="${k}"><b>${v.name}</b><small>${v.desc}</small></button>`).join('')}</div></div>
     <div class="field"><span>Difficulty</span><div class="chips">${Object.entries(DIFFICULTY).map(([k, v]) => `<button class="chip wide ${s.difficulty === k ? 'on' : ''}" data-a="set" data-k="difficulty" data-v="${k}">${v.name}</button>`).join('')}</div></div>
-    <div class="row gap"><button class="btn ghost" data-a="title">Back</button><button class="btn primary big" data-a="start">Begin Campaign →</button></div>
+    <div class="row gap"><button class="btn ghost" data-a="title">Back</button><button class="btn primary big" data-a="start">Let's go →</button></div>
   </div>`;
 }
 
 function helpHTML() {
   return `<h2>How to play</h2>
-  <h3>1 · The Campaign</h3>
-  <p>You lead the main opposition party against the ruling <b style="color:${RIVALS.A.color}">RSP</b>. Each week you get <b>3 action points</b>. Tap a state on the map to rally or canvass there, or to court its regional party. National actions (ads, social media, fundraising) are below the map. Big states matter most — Uttar Pradesh alone has 80 seats.</p>
-  <p><b>Alliances</b> are the key to power: allied parties pool votes with you and their MPs count toward your 272. Regional parties join whoever looks like winning, so build momentum first.</p>
-  <p><b>Manifesto promises</b> win votes, but if you become PM you must deliver them — broken promises cost trust at the next election.</p>
-  <h3>2 · Election & Coalition</h3>
-  <p>Every one of the 543 seats is first-past-the-post. Fall short of 272 and you can bargain with kingmakers using cabinet berths, state packages or the Deputy PM post.</p>
-  <h3>3 · Governing</h3>
-  <p>Each turn is a quarter. You set taxes and spending in the <b>Budget</b> (once a year), pass <b>Bills</b> with Political Capital, and handle crises. Money bills skip the Rajya Sabha; other bills need it — or some clever floor management.</p>
-  <p>Watch inflation (everyone hates it), unemployment (youth and workers), and the deficit (rating agencies are watching). The RBI sets interest rates on its own — you can lean on it, at a price.</p>
-  <p>Keep allies happy or they will walk out, and a no-confidence motion may follow.</p>
-  <h3>4 · Re-election</h3>
-  <p>After 5 years your approval in each state becomes your starting position. Win again to extend your legacy.</p>
+  <div class="howto">
+    <div><span>🗳️</span><p><b>Win the election.</b> You get 3 moves a week. Tap a state to hold a <b>rally</b> or win over its local party as an <b>ally</b>. Big states like UP (80 seats) matter most. Get 272 seats with your allies.</p></div>
+    <div><span>🤝</span><p><b>Allies are the key.</b> Local parties join whoever is winning, so build momentum first. Watch out — the RSP will try to steal them.</p></div>
+    <div><span>🏛️</span><p><b>Rule as PM.</b> Every quarter: handle a crisis, then play one policy card. Once a year, pick a budget.</p></div>
+    <div><span>⚖️</span><p><b>Keep everyone happy.</b> Prices, jobs and growth matter. Keep your promises. Keep your allies. Then win again!</p></div>
+  </div>
   <button class="btn primary" data-a="closemodal">Got it</button>`;
 }
 
@@ -100,55 +88,55 @@ function helpHTML() {
 function renderCampaign() {
   const C = G.camp;
   const proj = projection(16);
-  UI.proj = proj;
   const last = C.polls[C.polls.length - 1];
   const sel = UI.sel ? stateById(UI.sel) : null;
+  const left = C.weeks - C.week + 1;
   return `${topbar([
     ['📅', `Week ${C.week}/${C.weeks}`],
-    ['💰', fmtCr(C.funds)],
-    ['⚡', `<span class="dots">${'●'.repeat(C.ap)}${'○'.repeat(C.apMax - C.ap)}</span>`, 'Action points'],
-    ['🧑‍🤝‍🧑', C.cadre, 'Cadre'],
-    ['🤝', Math.round(G.trust), 'Trust'],
-    ['🔥', (C.momentum >= 0 ? '+' : '') + C.momentum.toFixed(1), 'Momentum'],
+    ['💰', '₹' + Math.round(C.funds) + ' cr'],
+    ['⚡', `<span class="dots">${'●'.repeat(C.ap)}${'○'.repeat(C.apMax - C.ap)}</span>`],
+    ['🔥', C.momentum >= 1 ? 'Hot' : C.momentum <= -1 ? 'Cold' : 'Even'],
   ])}
-  <div class="layout">
-    <section class="col-main">
-      <div class="card">
-        <div class="card-h"><b>Opinion poll</b><span class="muted small">Projected seats with allies</span></div>
-        ${seatBar(last.youBloc, last.aBloc, TOTAL_SEATS - last.youBloc - last.aBloc)}
-        <div class="polltrend">
-          ${trendChart(C.polls)}
-        </div>
+  <div class="play">
+    <div class="card">
+      <div class="card-h"><b>📊 Poll</b><span class="muted small">${left === 1 ? 'Election next!' : left + ' weeks left'}</span></div>
+      ${seatBar(last.youBloc, last.aBloc, TOTAL_SEATS - last.youBloc - last.aBloc)}
+      ${trendChart(C.polls)}
+      <p class="tip">${campaignTip(last)}</p>
+    </div>
+    <div class="card">
+      ${renderMap(proj, C.alliances)}
+      <div class="legend">
+        <span><i style="background:${G.color}"></i>You</span><span><i style="background:${mix(G.color)}"></i>Your allies</span>
+        <span><i style="background:${RIVALS.A.color}"></i>RSP</span><span><i style="background:${mix(RIVALS.A.color)}"></i>RSP allies</span><span><i style="background:#8b8f9a"></i>Others</span>
       </div>
-      <div class="card">
-        <div class="card-h"><b>Battleground map</b><span class="muted small">Tap a state</span></div>
-        ${renderMap(proj, C.alliances)}
-        <div class="legend">
-          <span><i style="background:${G.color}"></i>${esc(G.short)}</span><span><i style="background:${mix(G.color)}"></i>Your allies</span>
-          <span><i style="background:${RIVALS.A.color}"></i>RSP</span><span><i style="background:${mix(RIVALS.A.color)}"></i>RSP allies</span>
-          <span><i style="background:${RIVALS.B.color}"></i>NBM</span><span><i style="background:#8b8f9a"></i>Others</span>
-        </div>
-      </div>
-      ${sel ? renderStatePanel(sel, proj) : ''}
-      <div class="card">
-        <div class="card-h"><b>National campaign</b></div>
-        <div class="actions">${['ads', 'social', 'membership', 'fundraise', 'attack', 'press'].map(id => actionBtn(id)).join('')}</div>
-      </div>
-    </section>
-    <aside class="col-side">
-      ${renderManifesto()}
-      ${renderAllianceList()}
-      ${renderLog()}
-    </aside>
+      ${sel ? renderStateSheet(sel, proj) : '<p class="muted center small">👆 Tap a state</p>'}
+    </div>
+    <div class="card">
+      <div class="card-h"><b>🇮🇳 National moves</b></div>
+      <div class="bigbtns">${['ads', 'fundraise', 'attack'].map(id => moveBtn(id)).join('')}</div>
+    </div>
+    ${C.promises.length ? `<div class="card small"><b>📜 Your promises:</b> ${C.promises.map(id => PROMISES.find(p => p.id === id).name).join(' · ')}</div>` : ''}
+    <div class="card news">${G.log.slice(0, 3).map(l => `<div class="logline ${l.kind}">${esc(l.msg)}</div>`).join('')}</div>
   </div>
-  <div class="bottombar"><span class="muted small">${C.weeks - C.week === 0 ? 'Election day is next!' : `${C.weeks - C.week + 1} weeks to polling day`}</span><button class="btn primary" data-a="endweek">${C.week === C.weeks ? 'Go to the Polls 🗳️' : 'End Week →'}</button></div>
-  ${C.event ? eventModal(CAMPAIGN_EVENTS.find(e => e.id === C.event.id), C.event.ctx, 'cev') : ''}`;
+  <div class="bottombar"><span class="muted small">${C.ap ? `${C.ap} move${C.ap > 1 ? 's' : ''} left` : 'No moves left'}</span><button class="btn primary ${C.ap ? '' : 'pulse'}" data-a="endweek">${C.week === C.weeks ? 'Election Day 🗳️' : 'Next Week →'}</button></div>
+  ${!C.manifestoDone && !C.promises.length ? manifestoModal() : C.event ? eventModal(CAMPAIGN_EVENTS.find(e => e.id === C.event.id), C.event.ctx, 'cev') : ''}`;
+}
+
+function campaignTip(last) {
+  const C = G.camp;
+  if (C.week === 1) return '💡 Start with rallies in big states, then seek allies once the polls move.';
+  if (last.youBloc >= MAJORITY) return '🎉 You are on course for a majority. Defend your lead!';
+  const free = STATES.filter(s => s.reg && !C.alliances[s.id]);
+  if (free.length && last.youBloc > last.aBloc - 60) return `💡 Polls are close — local parties may now say yes. Try ${free.sort((a, b) => b.seats - a.seats)[0].name}.`;
+  if (C.funds < 20) return '💡 Low on money? Hold a fundraiser.';
+  return `💡 You need ${MAJORITY - last.youBloc} more seats. Big states swing elections.`;
 }
 
 function trendChart(polls) {
-  const w = 300, h = 70, n = Math.max(polls.length, 2);
+  const w = 300, h = 54, n = Math.max(polls.length, 2);
   const x = i => (i / (Math.max(G.camp.weeks, n - 1))) * (w - 10) + 5;
-  const y = v => h - 5 - (v / 400) * (h - 10);
+  const y = v => h - 4 - (v / 400) * (h - 8);
   const line = (k, c) => `<polyline fill="none" stroke="${c}" stroke-width="2.5" points="${polls.map((p, i) => `${x(i).toFixed(1)},${y(p[k]).toFixed(1)}`).join(' ')}"/>`;
   return `<svg viewBox="0 0 ${w} ${h}" class="trend" preserveAspectRatio="none">
     <line x1="0" x2="${w}" y1="${y(272)}" y2="${y(272)}" stroke="currentColor" stroke-dasharray="4 4" opacity=".35"/>
@@ -167,69 +155,58 @@ function renderMap(proj, alliances) {
   }).join('')}</div>`;
 }
 
-function renderStatePanel(s, proj) {
+function renderStateSheet(s, proj) {
   const C = G.camp, sh = stateShares(s), r = proj.byState[s.id], al = C.alliances[s.id];
-  const names = [G.short, RIVALS.A.short, RIVALS.B.short, s.reg ? s.reg.short : 'Others'];
-  const cols = [G.color, RIVALS.A.color, RIVALS.B.color, s.reg ? partyColor('R', s.id, C.alliances) : '#8b8f9a'];
-  const bars = sh.map((v, i) => `<div class="vbar"><span>${esc(names[i])}</span><div><i style="width:${(v * 100).toFixed(1)}%;background:${cols[i]}"></i></div><b>${(v * 100).toFixed(0)}%</b><em>${Math.round(r[PKEYS[i]])} seats</em></div>`).join('');
-  let regional = '';
-  if (s.reg) {
-    const status = al === 'you' ? `<span class="tag good">Your ally${C.generous[s.id] ? ' (generous deal)' : ''}</span>` : al === 'A' ? `<span class="tag bad">Allied with RSP</span>` : `<span class="tag">Unaligned</span>`;
-    const cd = (C.cooldown[s.id] || 0) > C.week;
-    regional = `<div class="regional"><div><b>${esc(s.reg.name)}</b> ${status}</div>
-      <div class="muted small">Leans toward you: ${Math.round(C.affinity[s.id] * 100)}% · Opposes: ${s.reg.dislikes.join(', ')}</div>
-      ${al !== 'you' ? `<div class="actions">
-        <button class="act" data-a="camp" data-id="alliance" data-s="${s.id}" ${cd ? 'disabled' : ''}><span>🤝 Propose alliance</span><small>1 AP · ~${Math.round(allianceChance(s.id, false) * 100)}% chance</small></button>
-        <button class="act" data-a="camp" data-id="alliance" data-s="${s.id}" data-opt="1" ${cd ? 'disabled' : ''}><span>🎁 Generous seat-share</span><small>1 AP · ₹25 cr · ~${Math.round(allianceChance(s.id, true) * 100)}% chance</small></button>
-      </div>${cd ? '<div class="muted small">Talks on hold for now.</div>' : ''}` : ''}</div>`;
+  const mine = Math.round(r.you + (al === 'you' ? r.R : 0));
+  const parts = [[G.short, sh[0], G.color], ['RSP', sh[1], RIVALS.A.color], [s.reg ? s.reg.short : 'Others', sh[3], partyColor('R', s.id, C.alliances)], ['NBM', sh[2], RIVALS.B.color]];
+  let allyBtn = '';
+  if (s.reg && al !== 'you') {
+    const blocked = actionBlocked('alliance', s.id, false);
+    const ch = Math.round(allianceChance(s.id, false) * 100);
+    allyBtn = `<button class="move" data-a="camp" data-id="alliance" data-s="${s.id}" ${blocked ? 'disabled' : ''}>
+      <span class="mi">🤝</span><b>Make ${s.reg.short} an ally</b><small>${blocked && blocked.includes('time') ? 'Not talking right now' : `${ch}% chance${al === 'A' ? ' · steal from RSP' : ''}`}</small></button>`;
   }
-  return `<div class="card statepanel">
-    <div class="card-h"><b>${s.name}</b><span class="muted">${s.seats} seats · ${Math.round(s.urban * 100)}% urban</span><button class="x" data-a="sel" data-s="">✕</button></div>
-    ${bars}
-    <div class="muted small">Your ground game here: ${C.ground[s.id].toFixed(1)} · RSP: ${C.groundA[s.id].toFixed(1)}</div>
-    <div class="actions">${actionBtn('rally', s.id)}${actionBtn('cadre', s.id)}</div>
-    ${regional}
+  return `<div class="sheet">
+    <div class="sheet-h"><b>${s.name}</b><span class="seats">${s.seats} seats</span><button class="x" data-a="sel" data-s="">✕</button></div>
+    <div class="share">${parts.map(([n, v, c]) => `<i style="width:${(v * 100).toFixed(1)}%;background:${c}" title="${n}"></i>`).join('')}</div>
+    <div class="sharelbl">${parts.slice(0, 3).map(([n, v, c]) => `<span style="color:${c}">${esc(n)} ${Math.round(v * 100)}%</span>`).join('')}</div>
+    <p class="small">You'd win about <b>${mine} of ${s.seats}</b> seats here.${s.reg ? ` Local party: <b>${s.reg.name}</b>${al === 'you' ? ' — <span class="up">your ally ✓</span>' : al === 'A' ? ' — <span class="down">with RSP</span>' : ''}.` : ''}</p>
+    <div class="bigbtns">${moveBtn('rally', s.id)}${allyBtn}</div>
   </div>`;
 }
 
-function actionBtn(id, stateId) {
-  const a = CAMPAIGN_ACTIONS[id];
+const MOVE_TEXT = {
+  rally: ['📣', 'Hold a rally', s => `Win votes in ${s.name}`],
+  ads: ['📺', 'TV ad blitz', () => 'Boost everywhere'],
+  fundraise: ['💰', 'Fundraiser', () => '+₹50 cr, trust −2'],
+  attack: ['⚔️', 'Attack the RSP', () => 'Risky'],
+};
+
+function moveBtn(id, stateId) {
+  const a = CAMPAIGN_ACTIONS[id], [icon, name, sub] = MOVE_TEXT[id];
   const blocked = actionBlocked(id, stateId);
-  return `<button class="act" data-a="camp" data-id="${id}" ${stateId ? `data-s="${stateId}"` : ''} ${blocked ? `disabled title="${esc(blocked)}"` : ''}>
-    <span>${a.icon} ${a.name}</span><small>1 AP${a.cost ? ' · ' + fmtCr(a.cost) : ''}</small><em>${a.desc}</em></button>`;
+  return `<button class="move" data-a="camp" data-id="${id}" ${stateId ? `data-s="${stateId}"` : ''} ${blocked ? 'disabled' : ''}>
+    <span class="mi">${icon}</span><b>${name}</b><small>${a.cost ? '₹' + a.cost + ' cr · ' : ''}${sub(stateId ? stateById(stateId) : null)}</small></button>`;
 }
 
-function renderManifesto() {
-  const C = G.camp;
-  return `<div class="card">
-    <div class="card-h"><b>📜 Manifesto</b><span class="muted small">${C.promises.length}/5 · 1 AP each</span></div>
-    <div class="promises">${PROMISES.map(p => {
-      const on = C.promises.includes(p.id);
-      const eff = Object.entries(p.blocs).map(([b, v]) => `<span class="${v > 0 ? 'up' : 'down'}">${BLOCS.find(x => x.id === b).icon}${v > 0 ? '+' : ''}${v}</span>`).join(' ');
-      return `<button class="promise ${on ? 'on' : ''}" data-a="promise" data-id="${p.id}" ${on || C.promises.length >= 5 ? 'disabled' : ''}>
-        <b>${on ? '✅ ' : ''}${p.name}</b><span class="eff">${eff}</span><small>If elected: ${p.keep}</small></button>`;
+function manifestoModal() {
+  const n = UI.picks.length;
+  return `<div class="modal-bg"><div class="modal">
+    <h2>📜 Pick 3 promises</h2>
+    <p class="muted small">Promises win votes. If you become PM, you must keep them!</p>
+    ${blocLegend()}
+    <div class="pgrid">${PROMISES.map(p => {
+      const on = UI.picks.includes(p.id);
+      return `<button class="pcard ${on ? 'on' : ''}" data-a="pickp" data-id="${p.id}" ${!on && n >= 3 ? 'disabled' : ''}><b>${on ? '✅ ' : ''}${p.name}</b><span class="fx">${effChips(p.blocs)}</span></button>`;
     }).join('')}</div>
-  </div>`;
-}
-
-function renderAllianceList() {
-  const C = G.camp;
-  const mine = STATES.filter(s => C.alliances[s.id] === 'you'), theirs = STATES.filter(s => C.alliances[s.id] === 'A');
-  const li = arr => arr.map(s => `<button class="linkish" data-a="sel" data-s="${s.id}">${s.reg.short} <span class="muted">(${s.name})</span></button>`).join('') || '<span class="muted small">None yet</span>';
-  return `<div class="card"><div class="card-h"><b>Alliances</b></div>
-    <div class="small"><b style="color:${G.color}">Yours:</b> ${li(mine)}</div>
-    <div class="small" style="margin-top:6px"><b style="color:${RIVALS.A.color}">RSP's:</b> ${li(theirs)}</div></div>`;
-}
-
-function renderLog() {
-  return `<div class="card log"><div class="card-h"><b>📰 News</b></div>
-    ${G.log.slice(0, 14).map(l => `<div class="logline ${l.kind}"><span class="muted">${esc(l.t)}</span> ${esc(l.msg)}</div>`).join('')}</div>`;
+    <button class="btn primary wide" data-a="manifesto" ${n === 3 ? '' : 'disabled'}>${n === 3 ? 'Announce manifesto 📣' : `Choose ${3 - n} more`}</button>
+  </div></div>`;
 }
 
 function topbar(items) {
   return `<header class="topbar">
-    <div class="brand"><span class="sym" style="background:${G.color}">${G.symbol}</span><div><b>${esc(G.party)}</b><small>${esc(G.leader)}</small></div></div>
-    <div class="stats">${items.map(([i, v, t]) => `<div class="stat" ${t ? `title="${t}"` : ''}><span>${i}</span><b>${v}</b>${t ? `<small>${t}</small>` : ''}</div>`).join('')}</div>
+    <span class="sym" style="background:${G.color}" title="${esc(G.party)}">${G.symbol}</span>
+    <div class="stats">${items.map(([i, v]) => `<div class="stat"><span>${i}</span><b>${v}</b></div>`).join('')}</div>
     <button class="iconbtn" data-a="menu" aria-label="Menu">☰</button>
   </header>`;
 }
@@ -240,7 +217,7 @@ function eventModal(ev, ctx, kind) {
     <div class="ev-icon">${ev.icon}</div>
     <h2>${ev.title}</h2>
     <p>${esc(ev.text(G, ctx))}</p>
-    <div class="choices">${choices.map((c, i) => `<button class="choice" data-a="${kind}" data-i="${i}"><b>${c.label}</b><small>${[c.cost ? fmtCr(c.cost) : '', c.pc ? c.pc + ' PC' : '', c.hint || ''].filter(Boolean).join(' · ')}</small></button>`).join('')}</div>
+    <div class="choices">${choices.map((c, i) => `<button class="choice" data-a="${kind}" data-i="${i}"><b>${c.label}</b><small>${[c.cost ? '₹' + c.cost + ' cr' : '', c.pc ? c.pc + ' ⭐' : '', c.hint || ''].filter(Boolean).join(' · ')}</small></button>`).join('')}</div>
   </div></div>`;
 }
 
@@ -254,7 +231,7 @@ function renderResults() {
       if (!UI.reveal || G.phase !== 'results') return;
       UI.reveal.n++;
       render();
-      if (UI.reveal.n < order.length) UI.reveal.timer = setTimeout(step, 260);
+      if (UI.reveal.n < order.length) UI.reveal.timer = setTimeout(step, 220);
     };
     UI.reveal.timer = setTimeout(step, 600);
   }
@@ -268,17 +245,18 @@ function renderResults() {
   const done = UI.reveal.n >= order.length;
   let verdict = '';
   if (done) {
-    if (r.youBloc >= MAJORITY) verdict = `<div class="verdict good">🎉 A clear mandate! Your alliance has won ${r.youBloc} seats.</div>`;
-    else if (r.aBloc >= MAJORITY) verdict = `<div class="verdict bad">The RSP alliance returns to power with ${r.aBloc} seats.</div>`;
-    else verdict = `<div class="verdict">⚖️ Hung Parliament! Nobody has 272. Time to bargain.</div>`;
+    if (r.youBloc >= MAJORITY) verdict = `<div class="verdict good">🎉 You won! ${r.youBloc} seats for your alliance.</div>`;
+    else if (r.aBloc >= MAJORITY) verdict = `<div class="verdict bad">The RSP wins again with ${r.aBloc} seats.</div>`;
+    else verdict = `<div class="verdict">⚖️ Nobody has 272! Time to make deals.</div>`;
   }
   return `<div class="results">
     <h1>🗳️ Counting Day</h1>
-    <div class="bigcount"><div style="color:${G.color}"><b>${you}</b><small>${esc(G.short)} alliance</small></div><div class="muted"><b>${oth}</b><small>Others</small></div><div style="color:${RIVALS.A.color}"><b>${A}</b><small>RSP alliance</small></div></div>
+    <div class="bigcount"><div style="color:${G.color}"><b>${you}</b><small>You + allies</small></div><div class="muted"><b>${oth}</b><small>Others</small></div><div style="color:${RIVALS.A.color}"><b>${A}</b><small>RSP + allies</small></div></div>
     ${seatBar(you, A, oth, false)}
     <div class="results-grid">${shown.slice().reverse().map((s, i) => {
-      const x = r.byState[s.id];
-      return `<div class="rstate ${i === 0 && !done ? 'new' : ''}"><b>${s.name}</b><span><i style="color:${G.color}">${x.you}</i> · <i style="color:${partyColor('R', s.id, r.alliances)}">${s.reg ? s.reg.short : 'Oth'} ${x.R}</i> · <i style="color:${RIVALS.B.color}">${x.B}</i> · <i style="color:${RIVALS.A.color}">${x.A}</i></span></div>`;
+      const x = r.byState[s.id], al = r.alliances[s.id];
+      const y = x.you + (al === 'you' ? x.R : 0), a = x.A + (al === 'A' ? x.R : 0);
+      return `<div class="rstate ${i === 0 && !done ? 'new' : ''}"><b>${s.name}</b><span><i style="color:${G.color}">${y}</i> – <i style="color:${RIVALS.A.color}">${a}</i></span></div>`;
     }).join('')}</div>
     ${verdict}
     <div class="row gap center">${done ? '<button class="btn primary big" data-a="afterresults">Continue →</button>' : '<button class="btn ghost" data-a="skipreveal">Skip ⏩</button>'}</div>
@@ -289,207 +267,118 @@ function renderResults() {
 function renderCoalition() {
   const c = G.coal, t = coalTotals();
   return `<div class="coalition">
-    <h1>⚖️ Hung Parliament</h1>
-    <p class="muted">Round ${Math.min(c.round, c.rounds)} of ${c.rounds}. Win over kingmakers before the RSP does. You can approach each party once per round.</p>
+    <h1>🤝 Make a Deal</h1>
+    <p class="muted center">Round ${Math.min(c.round, c.rounds)} of ${c.rounds} · Win parties over before the RSP does</p>
     ${seatBar(t.you, t.A, TOTAL_SEATS - t.you - t.A)}
     <div class="kingmakers">${c.kingmakers.map(k => {
-      const side = k.side === 'you' ? '<span class="tag good">With you</span>' : k.side === 'A' ? '<span class="tag bad">With RSP</span>' : '';
+      const side = k.side === 'you' ? '<span class="tag good">With you ✓</span>' : k.side === 'A' ? '<span class="tag bad">With RSP</span>' : k.tried ? '<span class="tag">Said no</span>' : '';
       const dis = k.side || k.tried ? 'disabled' : '';
-      return `<div class="card km"><div class="card-h"><b>${esc(k.name)}</b><span class="seats">${k.seats} MPs</span></div>
-        <div class="muted small">Inclination toward you: ${Math.round(k.aff * 100)}% ${side} ${k.tried && !k.side ? '<span class="tag">Refused this round</span>' : ''}</div>
-        ${k.side ? '' : `<div class="actions">
-          <button class="act" data-a="offer" data-k="${k.key}" data-o="ask" ${dis}><span>🙏 Ask for support</span></button>
-          <button class="act" data-a="offer" data-k="${k.key}" data-o="berth" ${dis || (c.berths ? '' : 'disabled')}><span>🏛️ Cabinet berth</span><small>${c.berths} left</small></button>
-          <button class="act" data-a="offer" data-k="${k.key}" data-o="package" ${dis}><span>🎁 State package</span><small>Ongoing cost</small></button>
-          <button class="act" data-a="offer" data-k="${k.key}" data-o="dpm" ${dis || (c.dpm ? '' : 'disabled')}><span>⭐ Deputy PM</span><small>Once</small></button>
+      return `<div class="card km"><div class="card-h"><b>${esc(k.name)}</b><span class="seats">${k.seats} seats</span></div>
+        <div class="small">${face(k.aff * 100)} Likes you ${Math.round(k.aff * 100)}% ${side}</div>
+        ${k.side ? '' : `<div class="bigbtns three">
+          <button class="move" data-a="offer" data-k="${k.key}" data-o="ask" ${dis}><span class="mi">🙏</span><b>Ask</b><small>Free</small></button>
+          <button class="move" data-a="offer" data-k="${k.key}" data-o="berth" ${dis || (c.berths ? '' : 'disabled')}><span class="mi">🏛️</span><b>Minister post</b><small>${c.berths} left</small></button>
+          <button class="move" data-a="offer" data-k="${k.key}" data-o="package" ${dis}><span class="mi">🎁</span><b>Money for state</b><small>Costs later</small></button>
         </div>`}</div>`;
     }).join('')}</div>
-    <div class="bottombar"><span class="muted small">If nobody reaches 272 after round ${c.rounds}, the bigger coalition forms a minority government.</span><button class="btn primary" data-a="coalround">End Round →</button></div>
+    <div class="bottombar"><span class="muted small">Bigger side after round ${c.rounds} forms the government</span><button class="btn primary" data-a="coalround">Next Round →</button></div>
   </div>`;
 }
 
 // ---------------- governance ----------------
+function meter(icon, label, value, good, word) {
+  const g = clamp(good, 0, 1);
+  const col = g >= .6 ? 'var(--good)' : g >= .35 ? 'var(--warn)' : 'var(--bad)';
+  return `<div class="meter"><div class="mh"><span>${icon} ${label}</span><b style="color:${col}">${word}</b></div>
+    <div class="mbar"><i style="width:${Math.max(6, g * 100)}%;background:${col}"></i></div><small class="muted">${value}</small></div>`;
+}
+
 function renderGov() {
   const g = G.gov, e = G.eco;
+  if (!g.hand) dealHand();
   const appr = overallApproval();
-  const tabs = [['dash', '📊 Dashboard'], ['budget', '📒 Budget' + (isBudgetQuarter() && g.lastBudgetQ !== g.q ? ' •' : '')], ['bills', '📜 Bills'], ['parl', '🏛️ Parliament'], ['promises', '✅ Promises'], ['news', '📰 News']];
-  let body = '';
-  if (UI.tab === 'dash') body = renderDash();
-  if (UI.tab === 'budget') body = renderBudget();
-  if (UI.tab === 'bills') body = renderBills();
-  if (UI.tab === 'parl') body = renderParl();
-  if (UI.tab === 'promises') body = renderPromises();
-  if (UI.tab === 'news') body = renderLog();
   const ev = g.events[0];
+  const budgetDue = isBudgetQuarter() && g.lastBudgetQ !== g.q;
+  const growthWord = e.growth > 7.5 ? 'Booming' : e.growth > 6 ? 'Strong' : e.growth > 4 ? 'Slowing' : e.growth > 1.5 ? 'Weak' : 'Recession';
+  const priceWord = e.infl < 4.5 ? 'Stable' : e.infl < 6 ? 'Rising' : e.infl < 8 ? 'High' : 'Soaring';
+  const jobWord = e.unemp < 6 ? 'Plenty' : e.unemp < 8 ? 'OK' : e.unemp < 10 ? 'Scarce' : 'Crisis';
+  const cashWord = e.deficit < 4.5 ? 'Healthy' : e.deficit < 6 ? 'Stretched' : e.deficit < 8 ? 'Strained' : 'Broke';
+  const apprWord = appr >= 60 ? 'Loved' : appr >= 50 ? 'Liked' : appr >= 40 ? 'Mixed' : 'Angry';
+  const kept = g.promises.filter(id => PROMISES.find(p => p.id === id).check(G)).length;
   return `${topbar([
-    ['📅', quarterLabel(G.calQ), `Term ${G.term} · Q${g.q + 1}/20`],
-    ['🎯', g.pc + ' PC', 'Political capital'],
-    ['👍', Math.round(appr) + '%', 'Approval'],
-    ['🏛️', govSeats() + '/543', 'Lok Sabha'],
-    ['📜', g.rs + '/245', 'Rajya Sabha'],
-    ['🤝', Math.round(G.trust), 'Trust'],
+    ['📅', quarterLabel(G.calQ)],
+    ['⭐', g.pc + ' power'],
+    ['🏛️', govSeats() + ' MPs'],
   ])}
-  <nav class="tabs">${tabs.map(([k, l]) => `<button class="tab ${UI.tab === k ? 'on' : ''}" data-a="tab" data-t="${k}">${l}</button>`).join('')}</nav>
-  <div class="govbody">${body}</div>
-  <div class="bottombar"><span class="muted small">${g.minority ? '⚠️ Minority government' : `Majority: ${govSeats() - MAJORITY + 1} to spare`} · ${20 - g.q} quarters left in term</span><button class="btn primary" data-a="endq">End Quarter →</button></div>
+  <div class="play">
+    <div class="card">
+      <div class="card-h"><b>🇮🇳 The Nation</b><span class="muted small">Year ${Math.floor(g.q / 4) + 1} of 5 · Term ${G.term}</span></div>
+      <div class="meters">
+        ${meter('👍', 'Popularity', Math.round(appr) + '% approve', (appr - 25) / 45, apprWord)}
+        ${meter('📈', 'Economy', e.growth.toFixed(1) + '% growth', (e.growth - 2) / 7, growthWord)}
+        ${meter('🛒', 'Prices', e.infl.toFixed(1) + '% inflation', 1 - (e.infl - 3.5) / 6, priceWord)}
+        ${meter('👷', 'Jobs', e.unemp.toFixed(1) + '% jobless', 1 - (e.unemp - 4.5) / 6, jobWord)}
+        ${meter('🏦', 'Treasury', e.deficit.toFixed(1) + '% deficit · ' + RATINGS[e.rating], 1 - (e.deficit - 3.5) / 4.5, cashWord)}
+      </div>
+      <div class="people">${BLOCS.map(b => `<div class="person" title="${b.name}: ${Math.round(g.approval[b.id])}%"><span>${b.icon}</span><b>${face(g.approval[b.id])}</b><small>${b.name.split(' ')[0]}</small></div>`).join('')}</div>
+    </div>
+
+    ${budgetDue ? `<div class="card hilite">
+      <div class="card-h"><b>📒 Budget Day!</b><span class="muted small">Pick this year's budget</span></div>
+      <div class="hand">${Object.entries(BUDGET_PRESETS).map(([k, p]) => `<button class="pcard" data-a="preset" data-k="${k}"><span class="ci">${p.icon}</span><b>${p.name}</b><small>${p.desc}</small></button>`).join('')}</div>
+    </div>` : ''}
+
+    <div class="card">
+      <div class="card-h"><b>🗂️ Cabinet proposals</b><span class="muted small">${g.played ? 'Done for this quarter' : 'Play one card'}</span></div>
+      ${g.played ? '' : blocLegend()}
+      ${g.played ? '<p class="muted center">✅ You made your move. Tap <b>Next Quarter</b>.</p>' : `<div class="hand">${g.hand.map((c, i) => policyCard(c, i)).join('')}</div>`}
+    </div>
+
+    <div class="card">
+      <div class="card-h"><b>🤝 Allies</b><span class="muted small">${g.minority ? '⚠️ No majority!' : `Majority +${govSeats() - MAJORITY + 1}`}</span></div>
+      ${g.allies.length ? `<div class="allies">${g.allies.map(a => `<button class="allychip" data-a="pkg" data-k="${a.key}"><b>${esc(a.short)}</b> ${face(a.sat)} <small>${a.seats} MPs</small></button>`).join('')}</div><p class="muted small">Tap an ally to keep them happy.</p>` : '<p class="muted small">You rule alone.</p>'}
+    </div>
+
+    ${g.promises.length ? `<div class="card small"><b>📜 Promises kept: ${kept}/${g.promises.length}</b><br>${g.promises.map(id => { const p = PROMISES.find(x => x.id === id); return `${p.check(G) ? '✅' : '⏳'} ${p.keep}`; }).join('<br>')}</div>` : ''}
+    <div class="card news">${G.log.slice(0, 3).map(l => `<div class="logline ${l.kind}">${esc(l.msg)}</div>`).join('')}</div>
+  </div>
+  <div class="bottombar"><span class="muted small">${20 - g.q} quarters to next election</span><button class="btn primary ${g.played && !budgetDue ? 'pulse' : ''}" data-a="endq">Next Quarter →</button></div>
   ${ev ? eventModal(GOV_EVENTS.find(x => x.id === ev.id), ev.ctx, 'gev') : ''}`;
 }
 
-function indicator(name, val, hist, good, fmt = v => v.toFixed(1) + '%', note = '') {
-  const prev = hist.length > 1 ? hist[hist.length - 2] : null;
-  const cur = hist.length ? hist[hist.length - 1] : null;
-  let arrow = '';
-  if (prev != null && cur != null && Math.abs(cur - prev) >= .05) {
-    const up = cur > prev, isGood = good === 'up' ? up : !up;
-    arrow = `<span class="${isGood ? 'up' : 'down'}">${up ? '▲' : '▼'}</span>`;
+function policyCard(c, i) {
+  const g = G.gov;
+  if (c.type === 'pm') {
+    const a = PM_ACTIONS[c.id];
+    const dis = g.pc < a.pc || g[a.once];
+    return `<button class="pcard" data-a="play" data-i="${i}" ${dis ? 'disabled' : ''}><span class="ci">${a.icon}</span><b>${a.name}</b><small>${a.desc}</small><span class="cost">${a.pc} ⭐</span></button>`;
   }
-  return `<div class="ind"><span class="muted small">${name}</span><b>${fmt(val)} ${arrow}</b>${spark(hist.slice(-12))}${note ? `<small class="muted">${note}</small>` : ''}</div>`;
-}
-
-function renderDash() {
-  const g = G.gov, e = G.eco, h = G.hist;
-  return `<div class="grid2">
-    <div class="card"><div class="card-h"><b>Economy</b><span class="muted small">GDP ₹${Math.round(e.gdp)} lakh cr (~$${(e.gdp / 85).toFixed(2)} tn)</span></div>
-      <div class="inds">
-        ${indicator('GDP growth', e.growth, h.growth, 'up')}
-        ${indicator('Inflation', e.infl, h.infl, 'down', undefined, 'RBI target 4%')}
-        ${indicator('Unemployment', e.unemp, h.unemp, 'down')}
-        ${indicator('Fiscal deficit', e.deficit, h.deficit, 'down', undefined, '% of GDP')}
-        ${indicator('Debt / GDP', e.debt, h.debt, 'down', v => v.toFixed(0) + '%')}
-        <div class="ind"><span class="muted small">RBI repo rate</span><b>${e.repo.toFixed(2)}%</b><small class="muted">RBI credibility ${Math.round(g.rbiCred)}</small></div>
-        ${indicator('Sensex', e.sensex, h.sensex, 'up', v => Math.round(v).toLocaleString('en-IN'))}
-        <div class="ind"><span class="muted small">Forex reserves</span><b>$${Math.round(e.forex)} bn</b><small class="muted">10-yr yield ${e.yld.toFixed(2)}%</small></div>
-        <div class="ind"><span class="muted small">Credit rating</span><b class="${e.rating === 0 ? 'down' : ''}">${RATINGS[e.rating]}</b><small class="muted">Reviewed every Mar–May</small></div>
-      </div>
-    </div>
-    <div class="card"><div class="card-h"><b>Approval by group</b><span class="muted small">Overall ${Math.round(overallApproval())}%</span></div>
-      ${BLOCS.map(b => apprBar(b)).join('')}
-      ${spark(h.approval.slice(-20), G.color, 280, 40)}
-    </div>
-    <div class="card span2"><div class="card-h"><b>Prime Minister's Office</b><span class="muted small">${g.pc} PC available · +${clamp(3 + Math.round((overallApproval() - 45) / 8), 1, 6)} next quarter</span></div>
-      <div class="actions">${Object.entries(PM_ACTIONS).map(([k, a]) => `<button class="act" data-a="pm" data-id="${k}" ${g[a.once] || g.pc < a.pc ? 'disabled' : ''}><span>${a.icon} ${a.name}</span><small>${a.pc} PC</small><em>${a.desc}</em></button>`).join('')}</div>
-    </div>
-  </div>`;
-}
-
-function apprBar(b) {
-  const v = G.gov.approval[b.id];
-  const col = v >= 55 ? 'var(--good)' : v >= 40 ? 'var(--warn)' : 'var(--bad)';
-  return `<div class="abar"><span>${b.icon} ${b.name}</span><div><i style="width:${v}%;background:${col}"></i></div><b>${Math.round(v)}%</b></div>`;
-}
-
-function renderBudget() {
-  const g = G.gov, e = G.eco;
-  const open = isBudgetQuarter() && g.lastBudgetQ !== g.q;
-  if (!UI.draft || !open) UI.draft = open && UI.draft ? UI.draft : Object.fromEntries(Object.keys(BUDGET_LIMITS).map(k => [k, e.b[k]]));
-  const d = UI.draft;
-  const def = previewDeficit(d);
-  const row = k => {
-    const L = BUDGET_LIMITS[k], v = d[k], cur = e.b[k];
-    const diff = v - cur;
-    return `<div class="slider"><label><span>${L.name}</span><b id="bv-${k}">${L.step < 1 ? v.toFixed(1) : v}${L.unit}</b>${Math.abs(diff) > 1e-9 ? `<em class="${diff > 0 ? 'up' : 'down'}">${diff > 0 ? '+' : ''}${L.step < 1 ? diff.toFixed(1) : diff}</em>` : ''}</label>
-      <input type="range" min="${L.min}" max="${L.max}" step="${L.step}" value="${v}" data-b="${k}" ${open ? '' : 'disabled'}></div>`;
-  };
-  const tips = [
-    'Income tax ↓ pleases the Middle Class. Corporate tax ↓ pleases Business and lifts long-run growth.',
-    'GST ↑ raises lots of revenue but hits everyone\'s wallet and adds to inflation.',
-    'Infrastructure and Education/Health build long-term growth. Welfare & Agriculture win votes now.',
-    'Deficits above ~6% fuel inflation, anger voters and invite rating downgrades.',
-  ];
-  return `<div class="grid2">
-    <div class="card"><div class="card-h"><b>Taxes</b></div>${['itr', 'ctr', 'gst'].map(row).join('')}</div>
-    <div class="card"><div class="card-h"><b>Spending</b><span class="muted small">% of GDP</span></div>${['infra', 'defence', 'health', 'education', 'welfare', 'agri'].map(row).join('')}</div>
-    <div class="card span2">
-      <div class="card-h"><b>${open ? '📒 Union Budget — draft' : '📒 Current budget'}</b><span class="muted small">${open ? 'Budget session is open' : 'Next budget in the Dec–Feb quarter'}</span></div>
-      <div class="budsum">
-        <div><span class="muted small">Fiscal deficit</span><b id="defprev" class="${def > 6 ? 'down' : def < 4.5 ? 'up' : ''}">${def.toFixed(2)}% of GDP</b></div>
-        <div><span class="muted small">Interest on debt</span><b>${e.interest.toFixed(2)}%</b></div>
-        <div><span class="muted small">Schemes & programmes</span><b>${e.programSpend.toFixed(2)}%</b></div>
-        <div><span class="muted small">Revenue</span><b>${e.revenue.toFixed(2)}%</b></div>
-      </div>
-      ${e.b.programs.length ? `<div class="muted small">Ongoing schemes: ${e.b.programs.map(p => `${esc(p.name)} (${p.spend.toFixed(2)}%)`).join(', ')}</div>` : ''}
-      <ul class="tips">${tips.map(t => `<li>${t}</li>`).join('')}</ul>
-      ${open ? '<div class="row gap"><button class="btn ghost" data-a="resetbudget">Reset</button><button class="btn primary" data-a="budget">Present Budget to Parliament</button></div>' : ''}
-    </div>
-  </div>`;
-}
-
-function renderBills() {
-  const g = G.gov;
-  return `<div class="bills">${REFORMS.map(r => {
-    const passed = g.passed.includes(r.id);
-    const st = billStatus(r.id);
-    const eff = Object.entries(r.blocs).map(([b, v]) => `<span class="${v > 0 ? 'up' : 'down'}">${BLOCS.find(x => x.id === b).icon}${v > 0 ? '+' : ''}${v}</span>`).join(' ');
-    const extras = [r.boost ? `📈 growth +${r.boost}` : '', r.spend ? `💸 ${r.spend}% GDP/yr` : '', r.oneTime ? `💸 ${r.oneTime}% GDP once` : '', r.revOnce ? `💰 +${r.revOnce}% GDP once` : '', r.unemp ? `👷 jobs` : '', r.risk ? '⚠️ may trigger protests' : ''].filter(Boolean).join(' · ');
-    const promised = g.promises.some(id => PROMISES.find(p => p.id === id).check.toString().includes(`'${r.id}'`));
-    let actions = '';
-    if (!passed) {
-      const dis = g.pc < r.pc || g.events.length ? 'disabled' : '';
-      actions = `<div class="actions">
-        <button class="act" data-a="bill" data-id="${r.id}" data-m="vote" ${dis}><span>Introduce bill</span><small>${r.pc} PC${st.rsShort ? ` · RS pass ~${Math.round(st.rsChance * 100)}%` : ''}</small></button>
-        ${st.rsShort ? `<button class="act" data-a="bill" data-id="${r.id}" data-m="floor" ${g.pc < r.pc + st.floorPC ? 'disabled' : ''}><span>Floor management</span><small>${r.pc + st.floorPC} PC · secures RS</small></button>
-        <button class="act" data-a="bill" data-id="${r.id}" data-m="moneyroute" ${dis}><span>Route as Money Bill</span><small>${r.pc} PC · Trust −8</small></button>` : ''}
-      </div>`;
-    }
-    return `<div class="card bill ${passed ? 'passed' : ''}">
-      <div class="card-h"><b>${passed ? '✅ ' : ''}${r.name}</b><span class="muted small">${r.money ? 'Money bill' : 'Needs Rajya Sabha'}${promised ? ' · 📜 promised' : ''}</span></div>
-      <p class="small">${r.desc}</p>
-      <div class="eff">${eff}</div>
-      ${extras ? `<div class="muted small">${extras}</div>` : ''}
-      ${!passed && st.objectors.length ? `<div class="small warn">⚠️ Opposed by allies: ${st.objectors.map(a => a.short).join(', ')}</div>` : ''}
-      ${actions}
-    </div>`;
-  }).join('')}</div>`;
-}
-
-function renderParl() {
-  const g = G.gov;
-  const allySeats = g.allies.reduce((t, a) => t + a.seats, 0);
-  return `<div class="grid2">
-    <div class="card"><div class="card-h"><b>Lok Sabha</b><span class="muted small">${govSeats()} / 543</span></div>
-      ${seatBar(g.party + allySeats, TOTAL_SEATS - g.party - allySeats, 0, false)}
-      <p class="small">${esc(G.short)}: <b>${g.party}</b> MPs · Allies: <b>${allySeats}</b> MPs ${g.minority ? '· <span class="down">minority government</span>' : ''}</p>
-    </div>
-    <div class="card"><div class="card-h"><b>Rajya Sabha</b><span class="muted small">${g.rs} / 245 · need 123</span></div>
-      <div class="seatbar"><div style="width:${g.rs / 245 * 100}%;background:${G.color}"></div><span class="majline" style="left:${123 / 245 * 100}%"></span></div>
-      <p class="small muted">Win state elections to gain Rajya Sabha seats. Money bills don't need the Rajya Sabha.</p>
-    </div>
-    <div class="card span2"><div class="card-h"><b>Coalition partners</b></div>
-      ${g.allies.length ? g.allies.map(a => {
-        const col = a.sat >= 55 ? 'var(--good)' : a.sat >= 30 ? 'var(--warn)' : 'var(--bad)';
-        return `<div class="ally"><div><b>${esc(a.name)}</b> <span class="muted small">${a.short} · ${a.seats} MPs · opposes ${a.dislikes.join(', ') || 'nothing in particular'}</span></div>
-          <div class="abar"><span>Satisfaction</span><div><i style="width:${a.sat}%;background:${col}"></i></div><b>${Math.round(a.sat)}</b></div>
-          <button class="btn small" data-a="pkg" data-k="${a.key}" ${g.pc < 1 ? 'disabled' : ''}>🎁 Development package (1 PC, 0.12% GDP)</button></div>`;
-      }).join('') : '<p class="muted">You govern alone.</p>'}
-    </div>
-  </div>`;
-}
-
-function renderPromises() {
-  const g = G.gov;
-  if (!g.promises.length) return '<div class="card"><p class="muted">You made no manifesto promises this term.</p></div>';
-  return `<div class="card"><div class="card-h"><b>Manifesto tracker</b><span class="muted small">Checked at the end of the term</span></div>
-    ${g.promises.map(id => { const p = PROMISES.find(x => x.id === id), ok = p.check(G);
-      return `<div class="ptrack"><span>${ok ? '✅' : '⏳'}</span><div><b>${p.name}</b><div class="muted small">${p.keep}</div></div></div>`; }).join('')}</div>`;
+  const r = REFORMS.find(x => x.id === c.id), st = billStatus(r.id);
+  const promised = g.promises.some(id => PROMISES.find(p => p.id === id).check.toString().includes(`'${r.id}'`));
+  const tags = [r.boost ? '📈 growth' : '', r.spend || r.oneTime ? '💸 costly' : '', r.revOnce || r.rev > 0 ? '💰 cash' : '', r.unemp ? '👷 jobs' : '', r.risk ? '🔥 protests' : ''].filter(Boolean);
+  return `<button class="pcard" data-a="play" data-i="${i}" ${g.pc < r.pc ? 'disabled' : ''}>
+    ${promised ? '<span class="ribbon">📜 Promise</span>' : ''}
+    <span class="ci">📜</span><b>${r.name}</b><small>${r.desc}</small>
+    <span class="fx">${effChips(r.blocs)} ${tags.map(t => `<span class="chipfx">${t}</span>`).join('')}</span>
+    ${st.objectors.length ? `<span class="warn small">⚠️ Upsets ${st.objectors.map(a => a.short).join(', ')}</span>` : ''}
+    <span class="cost">${r.pc} ⭐ · ${Math.round(billChance(r.id) * 100)}% pass</span></button>`;
 }
 
 // ---------------- term report & game over ----------------
 function renderReport() {
   const r = G.report;
   return `<div class="report">
-    <h1>📋 Report Card — Term ${r.term}</h1>
+    <h1>📋 Your 5 Years</h1>
     <div class="inds big">
-      <div class="ind"><span class="muted small">Avg growth</span><b>${r.growth}%</b></div>
-      <div class="ind"><span class="muted small">Avg inflation</span><b>${r.infl}%</b></div>
-      <div class="ind"><span class="muted small">Unemployment</span><b>${r.unemp}%</b></div>
-      <div class="ind"><span class="muted small">Debt / GDP</span><b>${r.debt}%</b></div>
-      <div class="ind"><span class="muted small">GDP</span><b>₹${r.gdp} lakh cr</b></div>
-      <div class="ind"><span class="muted small">Approval</span><b>${r.approval}%</b></div>
+      <div class="ind"><span class="muted small">Growth</span><b>${r.growth}%</b></div>
+      <div class="ind"><span class="muted small">Inflation</span><b>${r.infl}%</b></div>
+      <div class="ind"><span class="muted small">Jobless</span><b>${r.unemp}%</b></div>
+      <div class="ind"><span class="muted small">Popularity</span><b>${r.approval}%</b></div>
     </div>
-    <div class="card"><b>Promises kept (${r.kept.length})</b><p>${r.kept.map(esc).join(', ') || '—'}</p>
-    <b>Promises broken (${r.broken.length})</b><p class="down">${r.broken.map(esc).join(', ') || '—'}</p></div>
-    <p class="muted">Your approval in each state becomes your starting position. The RSP smells blood.</p>
-    <button class="btn primary big" data-a="reelect">Begin Re-election Campaign →</button>
+    <div class="card"><b>✅ Promises kept (${r.kept.length})</b><p>${r.kept.map(esc).join(', ') || '—'}</p>
+    <b>❌ Promises broken (${r.broken.length})</b><p class="down">${r.broken.map(esc).join(', ') || '—'}</p></div>
+    <p class="muted center">The people will judge you. The RSP is ready to fight.</p>
+    <button class="btn primary big" data-a="reelect">Fight the Election →</button>
   </div>`;
 }
 
@@ -498,15 +387,13 @@ function renderGameOver() {
   const lostFirst = G.quartersAsPM === 0;
   return `<div class="report">
     <h1>${lostFirst ? '💔 Defeat' : '🏁 The End of an Era'}</h1>
-    <p class="lead">${lostFirst ? `The RSP holds on to power. ${esc(G.leader)} will lead the opposition for another five years.` : `${esc(G.leader)} leaves 7 Lok Kalyan Marg after ${L.yrs} years as Prime Minister.`}</p>
-    <div class="legacy"><small>Legacy</small><b>${L.title}</b><span>${L.score} points</span></div>
+    <p class="lead">${lostFirst ? `The RSP stays in power. ${esc(G.leader)} will try again in five years.` : `${esc(G.leader)} was Prime Minister for ${L.yrs} years.`}</p>
+    <div class="legacy"><small>Your legacy</small><b>${L.title}</b><span>${L.score} points</span></div>
     <div class="inds big">
       <div class="ind"><span class="muted small">Years as PM</span><b>${L.yrs}</b></div>
       <div class="ind"><span class="muted small">Elections won</span><b>${G.termsWon}</b></div>
-      <div class="ind"><span class="muted small">Avg growth</span><b>${G.hist.growth.length ? avg(G.hist.growth).toFixed(1) + '%' : '—'}</b></div>
-      <div class="ind"><span class="muted small">Reforms passed</span><b>${G.gov ? G.gov.passed.length : 0}</b></div>
+      <div class="ind"><span class="muted small">Laws passed</span><b>${G.gov ? G.gov.passed.length : 0}</b></div>
       <div class="ind"><span class="muted small">Promises kept</span><b>${G.promisesKept}</b></div>
-      <div class="ind"><span class="muted small">Promises broken</span><b>${G.promisesBroken}</b></div>
     </div>
     <button class="btn primary big" data-a="newgame">Play Again</button>
   </div>`;
@@ -516,14 +403,14 @@ function renderGameOver() {
 function render() {
   const app = $('#app');
   let html;
-  if (!G || UI.screen === 'title') html = UI.screen === 'setup' ? renderSetup() : renderTitle();
+  if (UI.screen === 'setup') html = renderSetup();
+  else if (!G || UI.screen === 'title') html = renderTitle();
   else if (G.phase === 'campaign') html = renderCampaign();
   else if (G.phase === 'results') html = renderResults();
   else if (G.phase === 'coalition') html = renderCoalition();
   else if (G.phase === 'gov') html = renderGov();
   else if (G.phase === 'termreport') html = renderReport();
   else html = renderGameOver();
-  if (UI.screen === 'setup') html = renderSetup();
   const y = window.scrollY;
   app.innerHTML = html;
   window.scrollTo(0, y);
@@ -537,9 +424,17 @@ function openModal(html) {
 }
 function closeModal() { const m = $('#popup'); if (m) m.remove(); }
 
+function quarterSummary(before) {
+  const e = G.eco, d = overallApproval() - before;
+  return `📈 Growth ${e.growth.toFixed(1)}% · 🛒 Prices ${e.infl.toFixed(1)}% · 👍 ${Math.round(overallApproval())}% (${d >= 0 ? '+' : ''}${Math.round(d)})`;
+}
+
 const ACTIONS = {
   continue() { if (load()) { UI.screen = 'game'; render(); } },
-  newgame() { UI.setup = { leader: 'Asha Verma', party: 'Jan Shakti Party', short: 'JSP', symbol: PARTY_SYMBOLS[0], color: PARTY_COLORS[0], ideology: 'centrist', difficulty: 'normal' }; UI.screen = 'setup'; G = null; render(); },
+  newgame() {
+    UI.setup = { leader: 'Asha Verma', party: 'Jan Shakti Party', symbol: PARTY_SYMBOLS[0], color: PARTY_COLORS[0], ideology: 'centrist', difficulty: 'normal' };
+    UI.screen = 'setup'; G = null; render();
+  },
   title() { UI.screen = 'title'; G = null; render(); },
   help() { openModal(helpHTML()); },
   closemodal() { closeModal(); },
@@ -547,61 +442,81 @@ const ACTIONS = {
   start() {
     readSetupInputs();
     const s = UI.setup;
-    if (!s.leader.trim() || !s.party.trim() || !s.short.trim()) return toast('Fill in your name and party', 'bad');
-    newGame(s); UI.screen = 'game'; UI.sel = 'UP'; UI.reveal = null; UI.tab = 'dash';
+    if (!s.leader.trim() || !s.party.trim()) return toast('Enter your name and party name', 'bad');
+    s.short = s.party.trim().split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 4);
+    newGame(s); UI.screen = 'game'; UI.sel = 'UP'; UI.reveal = null; UI.picks = [];
     render();
-    if (!localStorage.getItem('rajneeti.seenHelp')) { try { localStorage.setItem('rajneeti.seenHelp', '1'); } catch (e) { /* ignore */ } openModal(helpHTML()); }
+    let seen = false; try { seen = !!localStorage.getItem('rajneeti.seenHelp'); localStorage.setItem('rajneeti.seenHelp', '1'); } catch (e) { /* ignore */ }
+    if (!seen) openModal(helpHTML());
   },
   sel(d) { UI.sel = d.s || null; render(); },
+  pickp(d) { const i = UI.picks.indexOf(d.id); if (i >= 0) UI.picks.splice(i, 1); else if (UI.picks.length < 3) UI.picks.push(d.id); render(); },
+  manifesto() { choosePromises(UI.picks); UI.picks = []; toast('📣 Manifesto announced!', 'good'); render(); },
   camp(d) { handle(campaignAction(d.id, d.s, d.opt === '1')); },
-  promise(d) { handle(addPromise(d.id)); },
   endweek() {
+    const C = G.camp;
+    if (C.ap === 3 && !UI.confirmSkip) { UI.confirmSkip = true; return toast('You still have 3 moves! Tap again to skip the week.', 'bad'); }
+    UI.confirmSkip = false;
     const r = endWeek();
     if (r.err) return toast(r.err, 'bad');
     if (r.election) { UI.reveal = null; window.scrollTo(0, 0); }
+    else { const p = G.camp.polls, a = p[p.length - 2], b = p[p.length - 1]; const d = b.youBloc - a.youBloc; toast(`New poll: you ${b.youBloc} seats (${d >= 0 ? '+' : ''}${d})`, d >= 0 ? 'good' : 'bad'); }
     render();
   },
   cev(d) { handle(resolveCampaignEvent(+d.i)); },
   skipreveal() { clearTimeout(UI.reveal.timer); UI.reveal.n = 999; render(); },
-  afterresults() { UI.reveal = null; afterResults(); UI.tab = 'budget'; save(); window.scrollTo(0, 0); render(); },
+  afterresults() {
+    UI.reveal = null; afterResults(); save(); window.scrollTo(0, 0); render();
+    if (G.phase === 'gov') welcomePM();
+  },
   offer(d) { handle(coalOffer(d.k, d.o)); save(); },
-  coalround() { const r = coalEndRound(); if (r === 'gov') UI.tab = 'budget'; save(); render(); },
-  tab(d) { UI.tab = d.t; render(); },
+  coalround() { coalEndRound(); save(); render(); if (G.phase === 'gov') welcomePM(); },
   gev(d) {
     const r = resolveGovEvent(+d.i);
     if (r.err) return toast(r.err, 'bad');
     toast(r.msg, 'good');
-    if (r.phaseChange) { UI.sel = null; window.scrollTo(0, 0); }
+    if (r.phaseChange) { UI.sel = null; UI.picks = []; window.scrollTo(0, 0); }
     render();
   },
   endq() {
+    const before = overallApproval();
     const r = endQuarter();
-    if (r.err) { if (r.err.includes('Budget')) UI.tab = 'budget'; toast(r.err, 'bad'); return render(); }
-    UI.draft = null;
-    if (isBudgetQuarter && G.phase === 'gov' && isBudgetQuarter()) { UI.tab = 'budget'; toast('📒 Budget session is open!'); }
+    if (r.err) { toast(r.err.includes('Budget') ? '📒 Pick a budget first!' : r.err, 'bad'); return render(); }
+    if (G.phase === 'gov') toast(quarterSummary(before));
     window.scrollTo(0, 0);
     render();
   },
-  budget() { const r = applyBudget(UI.draft); UI.draft = null; UI.tab = 'dash'; handle(r); },
-  resetbudget() { UI.draft = null; render(); },
-  bill(d) { handle(introduceBill(d.id, d.m)); },
-  pm(d) { handle(pmAction(d.id)); },
-  pkg(d) { handle(allyPackage(d.k)); },
-  reelect() { goToElection(false); UI.sel = null; window.scrollTo(0, 0); render(); },
+  preset(d) { handle(budgetPreset(d.k)); },
+  play(d) { handle(playCard(+d.i)); },
+  pkg(d) {
+    const a = G.gov.allies.find(x => x.key === d.k);
+    openModal(`<h2>${esc(a.name)}</h2><p>Mood: ${face(a.sat)} ${Math.round(a.sat)}/100 · ${a.seats} MPs</p><p class="muted small">Unhappy allies quit — and you could lose your majority.</p>
+      <div class="choices"><button class="choice" data-a="pkggo" data-k="${a.key}"><b>🎁 Send money to their state</b><small>1 ⭐ · makes them much happier</small></button><button class="choice" data-a="closemodal"><b>Not now</b></button></div>`);
+  },
+  pkggo(d) { handle(allyPackage(d.k)); },
+  reelect() { goToElection(false); UI.sel = null; UI.picks = []; window.scrollTo(0, 0); render(); },
   menu() {
     openModal(`<h2>Menu</h2><div class="choices">
       <button class="choice" data-a="help"><b>📖 How to play</b></button>
-      <button class="choice" data-a="quit"><b>🏠 Save & return to title</b></button>
-      <button class="choice" data-a="abandon"><b>🗑️ Abandon this game</b><small>Deletes your save</small></button>
+      <button class="choice" data-a="news"><b>📰 All news</b></button>
+      <button class="choice" data-a="quit"><b>🏠 Save & exit</b></button>
+      <button class="choice" data-a="abandon"><b>🗑️ Start over</b><small>Deletes your save</small></button>
       <button class="choice" data-a="closemodal"><b>Close</b></button></div>`);
   },
-  quit() { save(); closeModal(); UI.screen = 'title'; G = null; render(); },
-  abandon() { if (confirm('Delete this saved game?')) { clearSave(); closeModal(); UI.screen = 'title'; G = null; render(); } },
+  news() { openModal(`<h2>📰 News</h2>${G.log.slice(0, 30).map(l => `<div class="logline ${l.kind}"><span class="muted">${esc(l.t)}</span> ${esc(l.msg)}</div>`).join('')}<button class="btn primary" data-a="closemodal">Close</button>`); },
+  quit() { save(); UI.screen = 'title'; G = null; render(); },
+  abandon() { if (confirm('Delete this saved game?')) { clearSave(); UI.screen = 'title'; G = null; render(); } },
 };
+
+function welcomePM() {
+  openModal(`<div class="center"><div class="ev-icon">🇮🇳</div><h2>Prime Minister ${esc(G.leader)}!</h2>
+    <p>Each quarter: handle any crisis, play <b>one</b> policy card, then tap <b>Next Quarter</b>. Policies cost ⭐ power — you earn more by staying popular.</p>
+    <p>First job: pick your Budget.</p><button class="btn primary" data-a="closemodal">Let's govern</button></div>`);
+}
 
 function readSetupInputs() {
   if (!$('#f-leader')) return;
-  UI.setup.leader = $('#f-leader').value; UI.setup.party = $('#f-party').value; UI.setup.short = $('#f-short').value.toUpperCase();
+  UI.setup.leader = $('#f-leader').value; UI.setup.party = $('#f-party').value;
 }
 
 document.addEventListener('click', e => {
@@ -609,18 +524,8 @@ document.addEventListener('click', e => {
   if (!el || el.disabled) return;
   const a = el.dataset.a;
   if ($('#popup')) { if (!el.closest('#popup')) return; closeModal(); }
+  if (a !== 'endweek') UI.confirmSkip = false;
   ACTIONS[a] && ACTIONS[a](el.dataset);
 });
-
-// While dragging, update just the numbers; re-render fully when the slider is released.
-document.addEventListener('input', e => {
-  const k = e.target.dataset && e.target.dataset.b;
-  if (!k || !UI.draft) return;
-  const L = BUDGET_LIMITS[k];
-  UI.draft[k] = parseFloat(e.target.value);
-  $('#bv-' + k).textContent = (L.step < 1 ? UI.draft[k].toFixed(1) : UI.draft[k]) + L.unit;
-  $('#defprev').textContent = previewDeficit(UI.draft).toFixed(2) + '% of GDP';
-});
-document.addEventListener('change', e => { if (e.target.dataset && e.target.dataset.b) render(); });
 
 render();
